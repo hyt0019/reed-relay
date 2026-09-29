@@ -29,6 +29,8 @@ def validate_hotkeys(hotkeys):
     for name, value in hotkeys.items():
         parts = str(value).upper().replace(" ", "").split("+")
         key = normalize_key(parts[-1])
+        if key == "F12":
+            raise ValueError("F12 是 Windows 调试器保留热键，请改用 F10 等按键")
         mods = set(parts[:-1])
         if not mods <= {"CTRL", "ALT", "SHIFT", "WIN"} or key.startswith("MOUSE_") or key in {"CTRL", "ALT", "SHIFT"}:
             raise ValueError(f"全局热键无效：{value}")
@@ -54,7 +56,7 @@ class Profile:
     combinations: list[list[int]] = field(default_factory=lambda: [[], [0], [1], [2], [0, 1], [1, 2]])
     reference_hz: float = 440
     calibrated: bool = False
-    hotkeys: dict = field(default_factory=lambda: {"toggle": "F8", "previous": "F6", "next": "F7", "emergency": "F12"})
+    hotkeys: dict = field(default_factory=lambda: {"toggle": "F8", "previous": "F6", "next": "F7", "emergency": "F10"})
     schema_version: int = 1
 
     def validate(self):

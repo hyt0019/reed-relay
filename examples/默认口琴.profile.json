@@ -63,7 +63,7 @@
     "toggle": "F8",
     "previous": "F6",
     "next": "F7",
-    "emergency": "F12"
+    "emergency": "F10"
   },
   "schema_version": 1
 }
