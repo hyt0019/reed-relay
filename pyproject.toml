@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "reed-relay"
+version = "0.1.0"
+description = "Independent audio transcription and game instrument playback tools"
+requires-python = ">=3.10,<3.14"
+dependencies = ["PySide6>=6.8,<7", "numpy>=1.26,<2.3", "mido>=1.3,<2", "sounddevice>=0.5,<1"]
+
+[project.optional-dependencies]
+converter = ["librosa>=0.10.2,<0.12", "scipy>=1.11", "soundfile>=0.12", "onnxruntime>=1.17", "pretty-midi>=0.2.10", "mir-eval>=0.7", "resampy==0.4.2", "scikit-learn>=1.3", "imageio-ffmpeg>=0.5"]
+dev = ["pytest>=8", "pyinstaller>=6.10"]
+
+[project.gui-scripts]
+reed-player = "reed_relay.app:player_main"
+reed-converter = "reed_relay.app:converter_main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+reed_relay = ["ui/*.qml"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

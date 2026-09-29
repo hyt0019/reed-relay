@@ -1,0 +1,174 @@
+{
+  "title": "晨风 · 演奏测试",
+  "notes": [
+    {
+      "start_ms": 0,
+      "duration_ms": 320,
+      "midi_pitch": 60,
+      "velocity": 90,
+      "confidence": 1.0,
+      "voice": "旋律",
+      "id": "6499aaaaf54e",
+      "cents": 0.0
+    },
+    {
+      "start_ms": 400,
+      "duration_ms": 320,
+      "midi_pitch": 64,
+      "velocity": 90,
+      "confidence": 1.0,
+      "voice": "旋律",
+      "id": "41eddad42592",
+      "cents": 0.0
+    },
+    {
+      "start_ms": 800,
+      "duration_ms": 320,
+      "midi_pitch": 67,
+      "velocity": 90,
+      "confidence": 1.0,
+      "voice": "旋律",
+      "id": "856317617d41",
+      "cents": 0.0
+    },
+    {
+      "start_ms": 1200,
+      "duration_ms": 320,
+      "midi_pitch": 72,
+      "velocity": 90,
+      "confidence": 1.0,
+      "voice": "旋律",
+      "id": "c0e048030f7b",
+      "cents": 0.0
+    },
+    {
+      "start_ms": 1600,
+      "duration_ms": 320,
+      "midi_pitch": 71,
+      "velocity": 90,
+      "confidence": 1.0,
+      "voice": "旋律",
+      "id": "73dca8306dbe",
+      "cents": 0.0
+    },
+    {
+      "start_ms": 2000,
+      "duration_ms": 320,
+      "midi_pitch": 69,
+      "velocity": 90,
+      "confidence": 1.0,
+      "voice": "旋律",
+      "id": "c48fb335e67f",
+      "cents": 0.0
+    },
+    {
+      "start_ms": 2400,
+      "duration_ms": 320,
+      "midi_pitch": 67,
+      "velocity": 90,
+      "confidence": 1.0,
+      "voice": "旋律",
+      "id": "fc6bd15ceee3",
+      "cents": 0.0
+    },
+    {
+      "start_ms": 2800,
+      "duration_ms": 320,
+      "midi_pitch": 64,
+      "velocity": 90,
+      "confidence": 1.0,
+      "voice": "旋律",
+      "id": "191050df1319",
+      "cents": 0.0
+    },
+    {
+      "start_ms": 3200,
+      "duration_ms": 320,
+      "midi_pitch": 62,
+      "velocity": 90,
+      "confidence": 1.0,
+      "voice": "旋律",
+      "id": "4ec4366a08ad",
+      "cents": 0.0
+    },
+    {
+      "start_ms": 3600,
+      "duration_ms": 320,
+      "midi_pitch": 65,
+      "velocity": 90,
+      "confidence": 1.0,
+      "voice": "旋律",
+      "id": "473bae4024db",
+      "cents": 0.0
+    },
+    {
+      "start_ms": 4000,
+      "duration_ms": 320,
+      "midi_pitch": 69,
+      "velocity": 90,
+      "confidence": 1.0,
+      "voice": "旋律",
+      "id": "384bd38157ee",
+      "cents": 0.0
+    },
+    {
+      "start_ms": 4400,
+      "duration_ms": 320,
+      "midi_pitch": 72,
+      "velocity": 90,
+      "confidence": 1.0,
+      "voice": "旋律",
+      "id": "6b3de5e78ab1",
+      "cents": 0.0
+    },
+    {
+      "start_ms": 4800,
+      "duration_ms": 320,
+      "midi_pitch": 67,
+      "velocity": 90,
+      "confidence": 1.0,
+      "voice": "旋律",
+      "id": "e73f05ebfc9e",
+      "cents": 0.0
+    },
+    {
+      "start_ms": 5200,
+      "duration_ms": 320,
+      "midi_pitch": 64,
+      "velocity": 90,
+      "confidence": 1.0,
+      "voice": "旋律",
+      "id": "712b96eda652",
+      "cents": 0.0
+    },
+    {
+      "start_ms": 5600,
+      "duration_ms": 320,
+      "midi_pitch": 62,
+      "velocity": 90,
+      "confidence": 1.0,
+      "voice": "旋律",
+      "id": "2e61bcb5553b",
+      "cents": 0.0
+    },
+    {
+      "start_ms": 6000,
+      "duration_ms": 320,
+      "midi_pitch": 60,
+      "velocity": 90,
+      "confidence": 1.0,
+      "voice": "旋律",
+      "id": "4ddff6ef1ab7",
+      "cents": 0.0
+    }
+  ],
+  "duration_ms": 6600,
+  "bpm": 120,
+  "source_file": "",
+  "reference_hz": 440,
+  "metadata": {
+    "author": "ReedRelay",
+    "purpose": "original calibration melody"
+  },
+  "schema_version": 1
+}

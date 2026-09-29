@@ -1,0 +1,69 @@
+{
+  "name": "默认口琴（待校准）",
+  "keys": [
+    "Z",
+    "X",
+    "C",
+    "V",
+    "B",
+    "N",
+    "M",
+    ","
+  ],
+  "pitches": [
+    60,
+    62,
+    64,
+    65,
+    67,
+    69,
+    71,
+    72
+  ],
+  "modifiers": [
+    {
+      "label": "降调",
+      "key": "MOUSE_LEFT",
+      "semitones": -12
+    },
+    {
+      "label": "半音",
+      "key": "MOUSE_MIDDLE",
+      "semitones": 1
+    },
+    {
+      "label": "升调",
+      "key": "MOUSE_RIGHT",
+      "semitones": 12
+    }
+  ],
+  "combinations": [
+    [],
+    [
+      0
+    ],
+    [
+      1
+    ],
+    [
+      2
+    ],
+    [
+      0,
+      1
+    ],
+    [
+      1,
+      2
+    ]
+  ],
+  "reference_hz": 440,
+  "calibrated": false,
+  "hotkeys": {
+    "toggle": "F8",
+    "previous": "F6",
+    "next": "F7",
+    "emergency": "F12"
+  },
+  "schema_version": 1
+}
