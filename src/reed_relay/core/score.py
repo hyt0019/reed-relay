@@ -71,6 +71,7 @@ class Score:
     reference_hz: float = 440
     metadata: dict = field(default_factory=dict)
     schema_version: int = 1
+    original_notes: list[Note] = field(default_factory=list)
 
     def validate(self):
         if self.schema_version != 1:
@@ -84,6 +85,8 @@ class Score:
             raise ValueError("曲谱来源与元数据格式无效")
         if any(not isinstance(n, Note) for n in self.notes):
             raise ValueError("音符格式无效")
+        if any(not isinstance(n, Note) for n in self.original_notes):
+            raise ValueError("原始音符备份格式无效")
         if len({n.id for n in self.notes}) != len(self.notes):
             raise ValueError("存在重复音符标识")
         self.notes.sort(key=lambda n: (n.start_ms, n.midi_pitch))
@@ -103,6 +106,7 @@ class Score:
             if len(raw["notes"]) > 500_000:
                 raise ValueError("曲谱音符数量过多")
             raw["notes"] = [Note(**n) for n in raw["notes"]]
+            raw["original_notes"] = [Note(**n) for n in raw.get("original_notes", [])]
             return cls(**raw).validate()
         except (TypeError, KeyError, json.JSONDecodeError) as e:
             raise ValueError(f"曲谱格式错误：{e}") from e
@@ -164,8 +168,8 @@ def extract_melody(notes: list[Note]) -> list[Note]:
         return []
     starts, ends = {}, {}
     for n in notes:
-        starts.setdefault(n.start_ms, []).append(n)
-        ends.setdefault(n.end_ms, []).append(n)
+        starts.setdefault(round(n.start_ms, 3), []).append(n)
+        ends.setdefault(round(n.end_ms, 3), []).append(n)
     times = sorted(set(starts) | set(ends))
     active, result, previous_pitch = {}, [], None
     for i, time in enumerate(times[:-1]):
@@ -178,6 +182,8 @@ def extract_melody(notes: list[Note]) -> list[Note]:
         chosen = max(active.values(), key=lambda n: n.confidence + n.midi_pitch * .006 -
                      (abs(n.midi_pitch - previous_pitch) * .008 if previous_pitch is not None else 0))
         until = times[i + 1]
+        if until - time < .1:
+            continue
         if result and result[-1].id.startswith(chosen.id + "_") and abs(result[-1].end_ms - time) < .01:
             result[-1] = replace(result[-1], duration_ms=until - result[-1].start_ms)
         else:

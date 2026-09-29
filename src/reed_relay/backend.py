@@ -7,6 +7,7 @@ from pathlib import Path
 import queue
 import sys
 import threading
+import uuid
 import wave
 
 import numpy as np
@@ -45,6 +46,11 @@ class Backend(QObject):
         self._tune, self._stream, self._mic_queue = {}, None, queue.Queue(maxsize=2)
         self._busy, self._conversion_progress, self._audio_path, self._waveform = False, 0., "", []
         self._conversion_cancel = threading.Event()
+        self._conversion_thread = None
+        self._audio_queue, self._selected_note = [], -1
+        self._media, self._audio_output = None, None
+        self._loop_start, self._loop_end, self._loop_enabled = 0, 0, False
+        self._pending_seek = None
         self._no_hotkeys = no_hotkeys
         self.engine = PlayerEngine(lambda kind, value: self.report.emit(kind, value))
         self.report.connect(self._handle_report)
@@ -66,6 +72,15 @@ class Backend(QObject):
         if mode == "player" and not no_hotkeys:
             self.hotkeys.start(self._profile.hotkeys)
         self.refreshWindows()
+        if mode == "converter":
+            from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
+            self._media = QMediaPlayer(self)
+            self._audio_output = QAudioOutput(self)
+            self._audio_output.setVolume(.65)
+            self._media.setAudioOutput(self._audio_output)
+            self._media.positionChanged.connect(self._media_position)
+            self._media.mediaStatusChanged.connect(self._media_status)
+            self._media.errorOccurred.connect(lambda *args: self._error("试听失败：" + self._media.errorString()))
 
     @Property(str, constant=True)
     def appMode(self): return self.mode
@@ -116,6 +131,12 @@ class Backend(QObject):
     def canUndo(self): return bool(self._undo)
     @Property(bool, notify=changed)
     def canRedo(self): return bool(self._redo)
+    @Property(int, notify=changed)
+    def selectedNote(self): return self._selected_note
+    @Property(int, notify=changed)
+    def queuedCount(self): return len(self._audio_queue)
+    @Property("QVariantList", notify=scoreChanged)
+    def voices(self): return sorted({n.voice for n in self._score.notes})
 
     def _error(self, e):
         self._message = str(e)
@@ -143,6 +164,23 @@ class Backend(QObject):
             self._state, self._message, self._active_pitch, self._active_key = "待机", value, -1, ""
         elif kind == "hotkeys": self._hotkey_status = value
         elif kind == "error": self._message = value
+        elif kind == "conversion":
+            self._conversion_progress, self._message, info = value
+            if info:
+                self._waveform = info.get("waveform", self._waveform)
+                self._audio_path = info.get("path", self._audio_path)
+        elif kind == "converted":
+            self._score, path = value
+            self._selected_note, self._undo, self._redo = -1, [], []
+            self._audio_path = self._score.source_file
+            self._message = f"已完成并保存：{path}"
+            self._check()
+            self.scoreChanged.emit()
+        elif kind == "job_done": self._busy = False
+        elif kind == "synthesized":
+            self._media.setSource(QUrl.fromLocalFile(str(value)))
+            self._loop_start, self._loop_end, self._loop_enabled = 0, 0, False
+            self._media.play()
         self.changed.emit()
 
     @Slot(str)
@@ -335,8 +373,263 @@ class Backend(QObject):
             self.changed.emit()
         except Exception as e: self._error(e)
 
+    @Slot()
+    def openAudio(self):
+        if self._busy: return
+        paths, _ = QFileDialog.getOpenFileNames(None, "选择音频（可多选）", "", "音频 (*.mp3 *.wav *.flac *.ogg *.m4a *.aac *.aiff *.wma)")
+        if paths: self.setAudioFiles(json.dumps(paths))
+
+    @Slot(str)
+    def setAudioFiles(self, raw):
+        if self._busy: return
+        try:
+            paths = [QUrl(v).toLocalFile() if str(v).startswith("file:") else str(v) for v in json.loads(raw)]
+            paths = [str(Path(p).resolve()) for p in paths if Path(p).is_file()]
+            if not paths: raise ValueError("没有找到有效音频文件")
+            self._audio_queue, self._audio_path = paths, paths[0]
+            self._waveform = []
+            self._message = f"已选择 {len(paths)} 个文件，点击开始转谱"
+            self.changed.emit()
+        except Exception as e: self._error(e)
+
+    @Slot(bool)
+    def convert(self, melody):
+        if self._busy: return
+        if not self._audio_queue:
+            self._error("请先选择音频文件")
+            return
+        self.stopAudio()
+        self._busy, self._conversion_progress = True, 0
+        self._conversion_cancel.clear()
+        paths = list(self._audio_queue)
+        def worker():
+            try:
+                from .converter.transcribe import transcribe
+                for i, path in enumerate(paths):
+                    def progress(value, message, info):
+                        data = (info or {}) | {"path": path}
+                        self.report.emit("conversion", ((i+value)/len(paths), f"{i+1}/{len(paths)}  {message}", data))
+                    score = transcribe(path, melody, self._conversion_cancel, progress)
+                    target = self.data_dir / "conversions" / (Path(path).stem[:100] + "_" + uuid.uuid4().hex[:6] + ".reedscore.json")
+                    score.save(target)
+                    self.report.emit("converted", (score, str(target)))
+            except Exception as e: self.report.emit("error", str(e))
+            finally: self.report.emit("job_done", None)
+        self._conversion_thread = threading.Thread(target=worker, daemon=True)
+        self._conversion_thread.start()
+        self.changed.emit()
+
+    @Slot()
+    def cancelConversion(self):
+        self._conversion_cancel.set()
+        self._error("正在取消；当前推断片段结束后停止")
+
+    @Slot()
+    def openProject(self):
+        if self._busy: return
+        path, _ = QFileDialog.getOpenFileName(None, "打开曲谱工程", str(self.data_dir), "曲谱 (*.json *.mid *.midi)")
+        if path: self.loadProjectPath(path)
+
+    @Slot(str)
+    def loadProjectPath(self, path):
+        try:
+            self.stopAudio()
+            score = Score.from_midi(path) if path.lower().endswith((".mid", ".midi")) else Score.load(path)
+            self._score, self._audio_path = score, score.source_file
+            self._undo, self._redo, self._selected_note = [], [], -1
+            self._waveform = score.metadata.get("waveform", [])
+            self._audio_queue = [score.source_file] if Path(score.source_file).is_file() else []
+            self._check()
+            self.scoreChanged.emit()
+            self._message = "已打开曲谱；点击音符可校对与试听"
+            self.changed.emit()
+        except Exception as e: self._error(e)
+
+    @Slot()
+    def recoverProject(self):
+        path = self.data_dir / "autosave.reedscore.json"
+        if path.exists(): self.loadProjectPath(str(path))
+        else: self._error("没有可恢复的自动保存工程")
+
+    @Slot(int)
+    def selectNote(self, index):
+        self._selected_note = index if 0 <= index < len(self._score.notes) else -1
+        self.changed.emit()
+
+    def _remember(self):
+        self._undo.append(list(self._score.notes))
+        self._undo = self._undo[-50:]
+        self._redo.clear()
+
+    def _edited(self):
+        self._score.validate()
+        self._check()
+        try: self._score.save(self.data_dir / "autosave.reedscore.json")
+        except Exception as e: self._message = f"自动保存失败：{e}"
+        self.scoreChanged.emit()
+        self.changed.emit()
+
+    @Slot(int, float, float, int)
+    def editNote(self, index, start, duration, pitch):
+        if self._busy: return
+        try:
+            if not 0 <= index < len(self._score.notes): raise ValueError("请先选择音符")
+            new = replace(self._score.notes[index], start_ms=start, duration_ms=duration, midi_pitch=pitch, cents=0)
+            self._remember()
+            self._score.notes[index] = new
+            self._score.validate()
+            self._selected_note = next(i for i,n in enumerate(self._score.notes) if n.id==new.id)
+            self._message = "已修改音符，原始转写备份保留"
+            self._edited()
+        except Exception as e: self._error(e)
+
+    @Slot(float, float, int)
+    def addNote(self, start, duration, pitch):
+        if self._busy: return
+        try:
+            new = Note(start, duration, pitch)
+            self._remember(); self._score.notes.append(new)
+            self._score.validate()
+            self._selected_note = next(i for i,n in enumerate(self._score.notes) if n.id==new.id)
+            self._edited()
+        except Exception as e: self._error(e)
+
+    @Slot(int)
+    def deleteNote(self, index):
+        if self._busy or not 0 <= index < len(self._score.notes): return
+        self._remember(); self._score.notes.pop(index)
+        self._selected_note = min(index, len(self._score.notes)-1)
+        self._edited()
+
+    @Slot(int)
+    def splitNote(self, index):
+        if self._busy or not 0 <= index < len(self._score.notes): return
+        try:
+            n = self._score.notes[index]
+            a = replace(n, duration_ms=n.duration_ms/2)
+            b = replace(n, start_ms=n.start_ms+n.duration_ms/2, duration_ms=n.duration_ms/2, id=uuid.uuid4().hex[:12])
+            self._remember(); self._score.notes[index:index+1] = [a,b]
+            self._edited()
+        except Exception as e: self._error(e)
+
+    @Slot(int)
+    def mergeNote(self, index):
+        if self._busy or not 0 <= index < len(self._score.notes)-1: return
+        try:
+            a,b = self._score.notes[index:index+2]
+            if a.midi_pitch != b.midi_pitch: raise ValueError("只能合并相邻的同音高音符")
+            new = replace(a, duration_ms=max(a.end_ms,b.end_ms)-a.start_ms)
+            self._remember(); self._score.notes[index:index+2] = [new]
+            self._edited()
+        except Exception as e: self._error(e)
+
+    @Slot()
+    def undo(self):
+        if self._undo and not self._busy:
+            self._redo.append(list(self._score.notes)); self._score.notes=self._undo.pop(); self._selected_note=-1; self._edited()
+
+    @Slot()
+    def redo(self):
+        if self._redo and not self._busy:
+            self._undo.append(list(self._score.notes)); self._score.notes=self._redo.pop(); self._selected_note=-1; self._edited()
+
+    @Slot(bool)
+    def changeReduction(self, melody):
+        if self._busy: return
+        self._remember()
+        if not self._score.original_notes: self._score.original_notes=list(self._score.notes)
+        source = self._score.original_notes
+        self._score.notes = extract_melody(source) if melody else list(source)
+        self._selected_note=-1
+        self._edited()
+
+    @Slot(str)
+    def selectVoice(self, voice):
+        if self._busy: return
+        if any(n.voice==voice for n in self._score.notes):
+            self._remember()
+            if not self._score.original_notes: self._score.original_notes=list(self._score.notes)
+            self._score.notes=[n for n in self._score.notes if n.voice==voice]
+            self._selected_note=-1; self._edited()
+
+    @Slot(str)
+    def exportScore(self, kind):
+        if self._busy or not self._score.notes: return
+        suffix, filter_text = {"json": (".reedscore.json", "曲谱工程 (*.reedscore.json)"), "midi": (".mid", "MIDI (*.mid)"), "text": (".txt", "简谱 (*.txt)")}[kind]
+        path, _ = QFileDialog.getSaveFileName(None, "导出曲谱", self._score.title+suffix, filter_text)
+        if path:
+            if not path.lower().endswith(suffix): path+=suffix
+            try:
+                {"json": self._score.save, "midi": self._score.export_midi, "text": self._score.export_text}[kind](path)
+                self._error(f"已导出：{path}")
+            except Exception as e: self._error(e)
+
+    def _media_position(self, position):
+        self._progress=position
+        if self._loop_end and position>=self._loop_end:
+            if self._loop_enabled: self._media.setPosition(self._loop_start)
+            else: self._media.pause()
+        self.changed.emit()
+
+    def _media_status(self, status):
+        from PySide6.QtMultimedia import QMediaPlayer
+        if status == QMediaPlayer.MediaStatus.LoadedMedia and self._pending_seek is not None:
+            self._media.setPosition(self._pending_seek)
+            self._pending_seek = None
+            self._media.play()
+
+    @Slot(bool)
+    def auditionOriginal(self, loop):
+        if self._media is None: return
+        source = self._score.source_file or self._audio_path
+        if not Path(source).is_file():
+            self._error("找不到原音频；请先重新选择原文件")
+            return
+        self._media.stop()
+        self._loop_start,self._loop_end=0,0
+        if 0<=self._selected_note<len(self._score.notes):
+            n=self._score.notes[self._selected_note]
+            self._loop_start=max(0,int(n.start_ms)-150)
+            self._loop_end=int(n.end_ms)+150
+        self._loop_enabled=loop
+        url=QUrl.fromLocalFile(source)
+        if self._media.source()==url:
+            self._media.setPosition(self._loop_start);self._media.play()
+        else:
+            self._pending_seek=self._loop_start
+            self._media.setSource(url)
+
+    @Slot()
+    def auditionScore(self):
+        if self._media is None or self._busy or not self._score.notes: return
+        self.stopAudio(); self._busy=True; self._conversion_cancel.clear()
+        score=replace(self._score, notes=list(self._score.notes))
+        if 0<=self._selected_note<len(score.notes):
+            n=score.notes[self._selected_note]
+            score=replace(score,notes=[replace(n,start_ms=0)],duration_ms=n.duration_ms)
+        path=self.data_dir / ("audition_"+uuid.uuid4().hex[:8]+".wav")
+        def worker():
+            try:
+                from .converter.audio import synthesize
+                synthesize(score,path,self._conversion_cancel)
+                self.report.emit("synthesized",path)
+            except Exception as e: self.report.emit("error",str(e))
+            finally: self.report.emit("job_done",None)
+        self._conversion_thread=threading.Thread(target=worker,daemon=True)
+        self._conversion_thread.start()
+        self.changed.emit()
+
+    @Slot()
+    def stopAudio(self):
+        self._loop_end=0
+        self._pending_seek=None
+        if self._media: self._media.stop()
+
     def close(self):
         self._conversion_cancel.set()
+        self.stopAudio()
+        if self._conversion_thread and self._conversion_thread.is_alive():
+            self._conversion_thread.join(timeout=2)
         self.engine.stop()
         self.hotkeys.close()
         if self._stream:
