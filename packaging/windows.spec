@@ -6,7 +6,7 @@ root = Path(SPECPATH).parent
 target = os.environ.get('REED_BUILD_TARGET', 'player')
 name = 'ReedRelay-' + target.title()
 datas = [(str(root/'src/reed_relay/ui'), 'reed_relay/ui'), (str(root/'docs/THIRD_PARTY.md'), '.')]
-hidden = []
+hidden = ['pyaudiowpatch']
 excluded = ['tensorflow', 'torch', 'matplotlib', 'IPython', 'notebook', 'pytest', 'tkinter']
 if target == 'player':
     excluded += ['reed_relay.converter', 'basic_pitch', 'librosa', 'scipy', 'sklearn', 'numba', 'llvmlite', 'onnxruntime', 'soundfile', 'imageio_ffmpeg', 'PySide6.QtMultimedia']

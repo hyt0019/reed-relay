@@ -83,7 +83,7 @@ ApplicationWindow {
             ColumnLayout {
                 anchors.top: parent.top; anchors.topMargin: 24; anchors.horizontalCenter: parent.horizontalCenter; spacing: 13
                 ActionButton { text: bridge.appMode === "player" ? "演奏" : "听谱"; primary: root.page === "main"; implicitWidth: 63; implicitHeight: 57; onClicked: root.page="main" }
-                ActionButton { text: "调音"; primary: root.page === "settings"; implicitWidth: 63; implicitHeight: 57; onClicked: { root.reloadDraft(); root.page="settings" } }
+                ActionButton { text: "调音"; primary: root.page === "settings"; implicitWidth: 63; implicitHeight: 57; onClicked: { root.reloadDraft(); if(root.page!=="settings" && bridge.captureSource==="system")bridge.refreshAudioDevices(); root.page="settings" } }
             }
             Label { anchors.bottom: parent.bottom; anchors.bottomMargin: 26; anchors.horizontalCenter: parent.horizontalCenter; text: "0.1.0"; color: "#78918e"; font.pixelSize: 12 }
         }
@@ -118,17 +118,45 @@ ApplicationWindow {
                                     Label { text: "Hz"; color: "#617c83" }
                                 }
                                 RowLayout {
-                                    ActionButton { text: bridge.listening ? "停止测音" : "麦克风测音"; onClicked: bridge.toggleMic() }
+                                    Label { text: "测音来源"; color: "#617c83" }
+                                    ComboBox {
+                                        Layout.fillWidth: true
+                                        model: ["电脑声音（耳机 / 扬声器）", "麦克风"]
+                                        currentIndex: bridge.captureSource==="system" ? 0 : 1
+                                        onActivated: bridge.setCaptureSource(currentIndex===0 ? "system" : "microphone")
+                                    }
+                                    ActionButton { text: bridge.listening ? "停止测音" : "开始测音"; primary: !bridge.listening; enabled: bridge.listening || bridge.captureSource!=="system" || bridge.captureDevice>=0; onClicked: bridge.toggleTuning() }
+                                }
+                                RowLayout {
+                                    visible: bridge.captureSource==="system"
+                                    ComboBox {
+                                        Layout.fillWidth: true; Layout.minimumWidth: 150
+                                        model: bridge.captureDevices; textRole: "label"
+                                        currentIndex: bridge.captureDevice
+                                        displayText: currentIndex<0 ? "未找到输出设备" : currentText
+                                        onActivated: bridge.setCaptureDevice(currentIndex)
+                                    }
+                                    ActionButton { text: "刷新设备"; onClicked: bridge.refreshAudioDevices() }
+                                }
+                                RowLayout {
+                                    Label { text: "输入音量"; color: "#617c83"; font.pixelSize: 12 }
+                                    ProgressBar { Layout.fillWidth: true; value: bridge.captureLevel; palette.highlight: "#508878" }
+                                    Label { text: bridge.listening ? "采集中" : "未采集"; color: bridge.listening ? "#3e765b" : "#7a8f91"; font.pixelSize: 12 }
+                                }
+                                Label { Layout.fillWidth: true; text: bridge.captureStatus; wrapMode: Text.Wrap; color: "#43636a"; font.pixelSize: 12 }
+                                RowLayout {
                                     ActionButton { text: "分析 WAV 单音"; onClicked: bridge.tuneFile() }
                                     ActionButton { text: "试听 A4"; onClicked: bridge.playTone(69, Number(reference.text)) }
                                 }
-                                Label { text: "麦克风只在测音开启时使用。测音按已保存的 A4 频率计算。"; color: "#7a8f91"; font.pixelSize: 11 }
+                                Label { Layout.fillWidth: true; wrapMode: Text.Wrap; text: bridge.captureSource==="system" ? "采集所选设备上的所有声音，请暂停其他音乐或视频。声音仅用于本地测音。" : "使用 Windows 默认录音设备。点击开始测音后才会使用麦克风。"; color: "#7a8f91"; font.pixelSize: 11 }
+                                Label { Layout.fillWidth: true; wrapMode: Text.Wrap; text: "测音使用已保存的 A4；播放参考音会停止采集。"; color: "#7a8f91"; font.pixelSize: 11 }
                             }
                             Rectangle {
                                 Layout.preferredWidth: 245; Layout.preferredHeight: 142; radius: 12; color: "#173c48"
                                 ColumnLayout {
                                     anchors.centerIn: parent; spacing: 6
                                     Label { Layout.alignment: Qt.AlignHCenter; text: bridge.tuning.name || "等待测音"; color: "#f5faf5"; font.pixelSize: 29; font.bold: true }
+                                    Label { Layout.alignment: Qt.AlignHCenter; text: bridge.tuning.frequency>0 ? "MIDI " + bridge.tuning.pitch : "逐个弹奏，读取音高"; color: "#bed5d5"; font.pixelSize: 12 }
                                     Label { Layout.alignment: Qt.AlignHCenter; text: (bridge.tuning.frequency || 0).toFixed(1) + " Hz    " + (bridge.tuning.cents || 0).toFixed(1) + " 音分"; color: "#bed5d5"; font.pixelSize: 13 }
                                     Rectangle {
                                         Layout.alignment: Qt.AlignHCenter; width: 190; height: 20; color: "transparent"

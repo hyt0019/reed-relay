@@ -7,6 +7,7 @@ ReedRelay uses these projects through their published packages. The project itse
 | PySide6 / Qt | Desktop UI and audio preview | https://doc.qt.io/qtforpython-6/licenses.html |
 | NumPy | Signal analysis and synthesis | https://numpy.org/doc/stable/license.html |
 | SoundDevice / PortAudio | Microphone and reference tone | https://github.com/spatialaudio/python-sounddevice |
+| PyAudioWPatch / PortAudio | Windows WASAPI output loopback for tuning | https://github.com/s0d3s/PyAudioWPatch |
 | Mido | MIDI import/export | https://github.com/mido/mido |
 | Basic Pitch 0.4.0 | Audio-to-note model and post-processing (Apache-2.0) | https://github.com/spotify/basic-pitch |
 | ONNX Runtime | Local model inference | https://github.com/microsoft/onnxruntime |

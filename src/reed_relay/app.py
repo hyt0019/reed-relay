@@ -21,8 +21,19 @@ def run(mode):
     parser.add_argument("--no-hotkeys", action="store_true")
     parser.add_argument("--score")
     parser.add_argument("--transcribe")
+    parser.add_argument("--check-loopback", action="store_true", help="播放短参考音并验证电脑声音采集，需 --output")
     parser.add_argument("--output")
     args = parser.parse_args()
+    if args.check_loopback:
+        if not args.output: parser.error("--check-loopback 需要 --output 诊断路径")
+        from .core.score import atomic_json
+        try:
+            from .capture import check_loopback
+            atomic_json(args.output, check_loopback())
+            return 0
+        except Exception as e:
+            atomic_json(args.output, {"passed": False, "error": str(e)})
+            return 1
     if args.transcribe:
         if mode != "converter" or not args.output:
             parser.error("--transcribe 需要听谱入口和 --output 输出路径")
@@ -47,6 +58,7 @@ def run(mode):
         if families: font_family = families[0]
     app.setFont(QFont(font_family, 10))
     backend = Backend(mode, no_hotkeys=args.no_hotkeys or bool(args.screenshot))
+    if args.page == "settings": backend.refreshAudioDevices()
     if args.demo: backend.loadDemo()
     if args.score: backend.loadProjectPath(args.score)
     engine = QQmlApplicationEngine()

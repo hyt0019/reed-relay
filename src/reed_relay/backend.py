@@ -7,6 +7,7 @@ from pathlib import Path
 import queue
 import sys
 import threading
+import time
 import uuid
 import wave
 
@@ -28,6 +29,7 @@ class Backend(QObject):
     issuesChanged = Signal()
     windowsChanged = Signal()
     selectionChanged = Signal()
+    captureDevicesChanged = Signal()
     report = Signal(str, object)
     hotkeyReceived = Signal(str)
 
@@ -52,6 +54,9 @@ class Backend(QObject):
         except (ValueError,OSError):
             pass
         self._tune, self._stream, self._mic_queue = {}, None, queue.Queue(maxsize=2)
+        self._capture_source, self._capture_devices, self._capture_device = "system", [], -1
+        self._loopback, self._capture_level, self._last_audio_time = None, 0., 0.
+        self._capture_status = "选择游戏正在使用的输出设备，然后开始测音"
         self._busy, self._conversion_progress, self._audio_path, self._waveform = False, 0., "", []
         self._conversion_cancel = threading.Event()
         self._conversion_thread = None
@@ -76,7 +81,7 @@ class Backend(QObject):
             self._message = f"读取本地配置失败：{e}"
         self._mic_timer = QTimer(self)
         self._mic_timer.setInterval(120)
-        self._mic_timer.timeout.connect(self._read_mic)
+        self._mic_timer.timeout.connect(self._read_tuning)
         if mode == "player" and not no_hotkeys:
             self.hotkeys.start(self._profile.hotkeys)
         self.refreshWindows()
@@ -128,7 +133,17 @@ class Backend(QObject):
     @Property("QVariantMap", notify=changed)
     def tuning(self): return self._tune
     @Property(bool, notify=changed)
-    def listening(self): return self._stream is not None
+    def listening(self): return self._stream is not None or self._loopback is not None
+    @Property(str, notify=changed)
+    def captureSource(self): return self._capture_source
+    @Property("QVariantList", notify=captureDevicesChanged)
+    def captureDevices(self): return self._capture_devices
+    @Property(int, notify=changed)
+    def captureDevice(self): return self._capture_device
+    @Property(float, notify=changed)
+    def captureLevel(self): return self._capture_level
+    @Property(str, notify=changed)
+    def captureStatus(self): return self._capture_status
     @Property(bool, notify=changed)
     def busy(self): return self._busy
     @Property(float, notify=changed)
@@ -357,16 +372,76 @@ class Backend(QObject):
     @Slot(int, float)
     def playTone(self, pitch, reference):
         try:
+            if self.listening: self.stopTuning()
             import sounddevice as sd
             sd.play(tone(pitch, reference), 44100)
         except Exception as e: self._error(f"参考音播放失败：{e}")
 
     @Slot()
-    def toggleMic(self):
+    def refreshAudioDevices(self):
+        previous = self._capture_devices[self._capture_device]["name"] if 0 <= self._capture_device < len(self._capture_devices) else None
+        self.stopTuning()
         try:
-            if self._stream:
-                self._mic_timer.stop()
-                self._stream.stop(); self._stream.close(); self._stream = None
+            from .capture import loopback_devices
+            self._capture_devices = loopback_devices()
+            self._capture_device = next((i for i,d in enumerate(self._capture_devices) if d["name"]==previous), 0 if self._capture_devices else -1)
+            self._capture_status = "请选择游戏正在使用的耳机或扬声器" if self._capture_devices else "未找到可采集的输出设备，请连接耳机/扬声器后刷新"
+        except Exception as e:
+            self._capture_devices, self._capture_device = [], -1
+            self._capture_status = f"无法读取声音设备：{e}"
+        self.captureDevicesChanged.emit()
+        self.changed.emit()
+
+    @Slot(str)
+    def setCaptureSource(self, source):
+        if source not in ("system", "microphone"): return
+        self.stopTuning()
+        self._capture_source = source
+        if source == "system": self.refreshAudioDevices()
+        else: self._capture_status = "将使用 Windows 默认录音设备"
+        self.changed.emit()
+
+    @Slot(int)
+    def setCaptureDevice(self, index):
+        self.stopTuning()
+        self._capture_device = index if 0 <= index < len(self._capture_devices) else -1
+        self._capture_status = "设备已选择，点击开始测音"
+        self.changed.emit()
+
+    @Slot()
+    def stopTuning(self):
+        self._mic_timer.stop()
+        stream, loopback = self._stream, self._loopback
+        self._stream = self._loopback = None
+        self._capture_level, self._tune = 0., {}
+        self._capture_status = "测音已停止"
+        try:
+            if stream:
+                try: stream.stop()
+                finally: stream.close()
+        except Exception as e: self._capture_status = f"关闭麦克风时出现问题：{e}"
+        try:
+            if loopback: loopback.stop()
+        except Exception as e: self._capture_status = f"关闭电脑声音采集时出现问题：{e}"
+        while not self._mic_queue.empty():
+            self._mic_queue.get_nowait()
+        self.changed.emit()
+
+    @Slot()
+    def toggleTuning(self):
+        if self.listening:
+            self.stopTuning()
+            return
+        try:
+            self.stopAudio()
+            self._tune, self._capture_level = {}, 0.
+            if self._capture_source == "system":
+                if not 0 <= self._capture_device < len(self._capture_devices):
+                    raise ValueError("请刷新并选择游戏使用的输出设备")
+                from .capture import SystemAudioCapture
+                capture = SystemAudioCapture(self._capture_devices[self._capture_device])
+                capture.start()
+                self._loopback = capture
             else:
                 import sounddevice as sd
                 def callback(data, frames, timing, status):
@@ -374,23 +449,45 @@ class Backend(QObject):
                     except queue.Full: pass
                 self._stream = sd.InputStream(samplerate=44100, channels=1, blocksize=11025, callback=callback)
                 self._stream.start()
-                self._mic_timer.start()
+            self._last_audio_time = time.monotonic()
+            self._capture_status = "正在采集电脑声音，请在游戏中弹奏单音" if self._loopback else "正在采集麦克风，请发出稳定单音"
+            self._mic_timer.start()
             self.changed.emit()
         except Exception as e:
-            self._stream = None
-            self._error(f"无法打开麦克风：{e}")
+            self.stopTuning()
+            self._capture_status = f"无法开始测音：{e}"
+            self._error(self._capture_status)
 
-    def _read_mic(self):
+    def _read_tuning(self):
         latest = None
-        while not self._mic_queue.empty():
-            latest = self._mic_queue.get_nowait()
+        rate = 44100
+        try:
+            if self._loopback:
+                latest, rate = self._loopback.latest(), self._loopback.rate
+            else:
+                while not self._mic_queue.empty():
+                    latest = self._mic_queue.get_nowait()
+        except Exception as e:
+            self.stopTuning()
+            self._capture_status = f"采集已中断：{e}"
+            self._error(self._capture_status)
+            return
         if latest is not None:
-            hz = detect_frequency(latest, 44100)
+            self._last_audio_time = time.monotonic()
+            rms = float(np.sqrt(np.mean(np.asarray(latest, dtype=float)**2)))
+            self._capture_level = max(0., min(1., (20*np.log10(max(rms, 1e-6))+60)/60))
+            hz = detect_frequency(latest, rate)
             self._tune = describe_frequency(hz, self._profile.reference_hz) if hz else {"name": "等待稳定音", "cents": 0, "frequency": 0}
-            self.changed.emit()
+            self._capture_status = "已检测到单音；可填写到下方对应按键" if hz else ("声音较弱或静音，请检查所选设备与游戏音量" if rms<.003 else "已收到声音，请单独弹奏一个音并减少伴奏")
+        elif time.monotonic() - self._last_audio_time > 1:
+            self._tune = {"name": "等待声音", "cents": 0, "frequency": 0}
+            self._capture_level = 0.
+            self._capture_status = "尚未收到声音，请确认游戏输出到所选设备；设备变化后请刷新"
+        self.changed.emit()
 
     @Slot()
     def tuneFile(self):
+        self.stopTuning()
         path, _ = QFileDialog.getOpenFileName(None, "选择单音录音", "", "PCM 录音 (*.wav)")
         if not path: return
         try:
@@ -690,8 +787,7 @@ class Backend(QObject):
             self._conversion_thread.join(timeout=2)
         self.engine.stop()
         self.hotkeys.close()
-        if self._stream:
-            self._stream.stop(); self._stream.close()
+        self.stopTuning()
         try:
             import sounddevice as sd
             sd.stop()

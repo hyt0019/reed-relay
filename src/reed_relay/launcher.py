@@ -15,7 +15,7 @@ def launch(mode):
         destination=directory/f"startup-{mode}.log"
         destination.write_text(traceback.format_exc(),encoding="utf-8")
         if sys.stderr: traceback.print_exc()
-        if os.name=="nt" and not any(flag in sys.argv for flag in ("--screenshot","--transcribe")):
+        if os.name=="nt" and not any(flag in sys.argv for flag in ("--screenshot","--transcribe","--check-loopback")):
             import ctypes
             ctypes.windll.user32.MessageBoxW(None,f"启动失败，诊断记录已保存到：\n{destination}","ReedRelay",16)
         return 1
