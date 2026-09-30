@@ -21,6 +21,7 @@ ScrollView {
             }
             Item { Layout.fillWidth: true }
             ActionButton { text: "恢复自动保存"; enabled: !bridge.busy; onClicked: bridge.recoverProject() }
+            ActionButton { text: "关联原音"; enabled: !bridge.busy; onClicked: bridge.relinkAudio() }
             ActionButton { text: "打开工程 / MIDI"; enabled: !bridge.busy; onClicked: bridge.openProject() }
         }
         Panel {
@@ -133,9 +134,27 @@ ScrollView {
                 }
             }
         }
+        Panel {
+            Layout.fillWidth: true; Layout.leftMargin: 26; Layout.rightMargin: 26
+            visible: bridge.issues.length>0
+            ColumnLayout {
+                anchors.fill: parent; spacing: 10
+                Label { text: "当前场景检查 · 点击定位音符"; color: "#17343b"; font.pixelSize: 16; font.bold: true }
+                ListView {
+                    Layout.fillWidth: true; Layout.preferredHeight: 140; clip: true; model: bridge.issues
+                    delegate: ItemDelegate {
+                        required property var modelData
+                        width: ListView.view.width; height: 34
+                        property int noteIndex: bridge.notes.findIndex(function(n) { return n.id===modelData.id })
+                        text: (noteIndex>=0 ? (bridge.notes[noteIndex].start_ms/1000).toFixed(2)+" 秒  ·  " : "") + modelData.message
+                        onClicked: if(noteIndex>=0) page.select(noteIndex)
+                    }
+                }
+            }
+        }
         RowLayout {
             Layout.fillWidth: true; Layout.leftMargin: 26; Layout.rightMargin: 26; Layout.bottomMargin: 26
-            Muted { Layout.fillWidth: true; text: "当前场景检查："+bridge.issues.length+" 项（可在风箱查看具体问题）"; color: "#8b704e" }
+            Muted { Layout.fillWidth: true; text: "当前场景检查："+bridge.issues.length+" 项"; color: "#8b704e" }
             ActionButton { text: "导出 MIDI"; enabled: !bridge.busy && bridge.notes.length>0; onClicked: bridge.exportScore("midi") }
             ActionButton { text: "导出简谱"; enabled: !bridge.busy && bridge.notes.length>0; onClicked: bridge.exportScore("text") }
             ActionButton { text: "保存曲谱工程"; primary: true; enabled: !bridge.busy && bridge.notes.length>0; onClicked: bridge.exportScore("json") }

@@ -38,8 +38,10 @@ def test_gui_audio_queue_completes_in_worker(tmp_path,monkeypatch):
     audio=tmp_path/"queue.wav"
     synthesize(Score("queue",[Note(300,800,64)],1500),audio)
     backend=Backend("converter",no_hotkeys=True)
-    backend.setAudioFiles(json.dumps([str(audio)]))
-    assert backend.queuedCount==1
+    corrupt=tmp_path/"broken.wav"
+    corrupt.write_bytes(b"not an audio file")
+    backend.setAudioFiles(json.dumps([str(corrupt),str(audio)]))
+    assert backend.queuedCount==2
     backend.convert(True)
     until=time.monotonic()+30
     while backend.busy and time.monotonic()<until:
@@ -48,6 +50,7 @@ def test_gui_audio_queue_completes_in_worker(tmp_path,monkeypatch):
     assert backend._score.notes, backend.message
     assert backend._waveform
     assert list((tmp_path/"data/conversions").glob("*.json"))
+    assert "成功 1/2" in backend.message
     backend.close()
 
 
@@ -63,4 +66,21 @@ def test_invalid_edit_and_profile_do_not_replace_good_data(tmp_path,monkeypatch)
     profile["keys"][0]="F8"
     backend.saveProfile(json.dumps(profile))
     assert backend._profile.keys[0]=="Z"
+    backend.close()
+
+
+def test_missing_next_song_stops_without_restarting_previous(tmp_path, monkeypatch):
+    app=QApplication.instance() or QApplication([])
+    monkeypatch.setenv("REED_RELAY_DATA_DIR",str(tmp_path))
+    backend=Backend("player",no_hotkeys=True)
+    backend.loadDemo()
+    backend._playlist.append({"path":str(tmp_path/"missing.json"),"title":"Missing","duration":1000})
+    backend._auto_continue=True
+    backend.toggle()
+    assert backend.engine.running
+    restarted=[]
+    monkeypatch.setattr(backend,"toggle",lambda:restarted.append(True))
+    backend.stepSong(1)
+    assert not backend.engine.running
+    assert not restarted
     backend.close()

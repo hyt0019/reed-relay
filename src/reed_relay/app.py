@@ -20,7 +20,21 @@ def run(mode):
     parser.add_argument("--demo", action="store_true")
     parser.add_argument("--no-hotkeys", action="store_true")
     parser.add_argument("--score")
+    parser.add_argument("--transcribe")
+    parser.add_argument("--output")
     args = parser.parse_args()
+    if args.transcribe:
+        if mode != "converter" or not args.output:
+            parser.error("--transcribe 需要听谱入口和 --output 输出路径")
+        try:
+            from .converter.transcribe import transcribe
+            transcribe(args.transcribe).save(args.output)
+            return 0
+        except Exception as e:
+            error_path = Path(str(args.output)+".error.txt")
+            error_path.parent.mkdir(parents=True, exist_ok=True)
+            error_path.write_text(str(e),encoding="utf-8")
+            return 1
     app = QApplication(sys.argv[:1])
     QQuickStyle.setStyle("Basic")
     app.setOrganizationName("ReedRelay")

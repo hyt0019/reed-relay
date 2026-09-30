@@ -17,7 +17,21 @@ ApplicationWindow {
     palette.buttonText: "#17343b"
     property string page: initialPage === "settings" ? "settings" : "main"
     property var draft: JSON.parse(JSON.stringify(bridge.profile))
-    function reloadDraft() { draft = JSON.parse(JSON.stringify(bridge.profile)) }
+    function reloadDraft() {
+        draft = JSON.parse(JSON.stringify(bridge.profile))
+        sceneName.text=draft.name; reference.text=String(draft.reference_hz)
+        calibrated.checked=draft.calibrated; combine.checked=draft.combinations.length>4
+        for(let i=0;i<8;i++) {
+            keyRows.itemAt(i).keyValue=draft.keys[i]
+            keyRows.itemAt(i).pitchValue=String(draft.pitches[i])
+        }
+        for(let i=0;i<3;i++) {
+            modRows.itemAt(i).keyValue=draft.modifiers[i].key
+            modRows.itemAt(i).shiftValue=String(draft.modifiers[i].semitones)
+        }
+        toggleHotkey.text=draft.hotkeys.toggle; previousHotkey.text=draft.hotkeys.previous
+        nextHotkey.text=draft.hotkeys.next; emergencyHotkey.text=draft.hotkeys.emergency
+    }
     function noteName(n) { return ["C","C♯","D","D♯","E","F","F♯","G","G♯","A","A♯","B"][((n%12)+12)%12] + (Math.floor(n/12)-1) }
     function clock(ms) { let s=Math.floor(ms/1000); return Math.floor(s/60).toString().padStart(2,"0")+":"+(s%60).toString().padStart(2,"0") }
     function saveDraft() {
@@ -133,6 +147,8 @@ ApplicationWindow {
                             RowLayout {
                                 Label { text: "八个音符键"; color: "#17343b"; font.pixelSize: 17; font.bold: true }
                                 Item { Layout.fillWidth: true }
+                                ActionButton { text: "音区 −12"; onClicked: { for(let i=0;i<8;i++)keyRows.itemAt(i).pitchValue=String(Math.max(0,Number(keyRows.itemAt(i).pitchValue)-12)) } }
+                                ActionButton { text: "音区 +12"; onClicked: { for(let i=0;i<8;i++)keyRows.itemAt(i).pitchValue=String(Math.min(127,Number(keyRows.itemAt(i).pitchValue)+12)) } }
                                 Label { text: "MIDI 60 = C4    ·    点击试听检验对应音高"; color: "#6f878a"; font.pixelSize: 12 }
                             }
                             RowLayout {
@@ -212,7 +228,8 @@ ApplicationWindow {
         id: playerPage
         ScrollView {
             id: playScroll; contentWidth: availableWidth; clip: true
-            function applyOptions() { bridge.configurePlayer(preview.checked, speed.value/100, delay.value, transpose.value, melody.checked, skip.checked, target.currentIndex) }
+            function applyOptions() { bridge.configurePlayer(preview.checked, speed.value/100, delay.value, transpose.value, melody.checked, skip.checked, target.currentIndex, autoContinue.checked) }
+            Component.onCompleted: applyOptions()
             ColumnLayout {
                 width: playScroll.availableWidth; spacing: 19
                 RowLayout {
@@ -288,19 +305,20 @@ ApplicationWindow {
                                     CheckBox { id: preview; text: "预演（不发送按键）"; checked: true; onToggled: playScroll.applyOptions(); font.pixelSize: 13 }
                                     Item { Layout.fillWidth: true }
                                     Label { text: "倒计时 / 秒"; color: "#6c8388"; font.pixelSize: 12 }
-                                    SpinBox { id: delay; from: 0; to: 15; value: 3; onValueModified: playScroll.applyOptions(); implicitWidth: 106 }
+                                    SpinBox { id: delay; from: 0; to: 15; value: bridge.playbackDefaults.delay; onValueModified: playScroll.applyOptions(); implicitWidth: 106 }
                                 }
                                 RowLayout {
                                     Label { text: "速度 %"; color: "#6c8388"; font.pixelSize: 12 }
-                                    SpinBox { id: speed; from: 25; to: 200; value: 100; stepSize: 5; onValueModified: playScroll.applyOptions(); implicitWidth: 120 }
+                                    SpinBox { id: speed; from: 25; to: 200; value: bridge.playbackDefaults.speed; stepSize: 5; onValueModified: playScroll.applyOptions(); implicitWidth: 120 }
                                     Item { Layout.fillWidth: true }
                                     Label { text: "演奏移调 / 半音"; color: "#6c8388"; font.pixelSize: 12 }
-                                    SpinBox { id: transpose; from: -48; to: 48; value: 0; onValueModified: playScroll.applyOptions(); implicitWidth: 110 }
+                                    SpinBox { id: transpose; from: -48; to: 48; value: bridge.playbackDefaults.transpose; onValueModified: playScroll.applyOptions(); implicitWidth: 110 }
                                 }
                                 RowLayout {
-                                    CheckBox { id: melody; text: "提取主旋律"; onToggled: playScroll.applyOptions(); font.pixelSize: 13 }
-                                    CheckBox { id: skip; text: "跳过音域外音"; onToggled: playScroll.applyOptions(); font.pixelSize: 13 }
+                                    CheckBox { id: melody; text: "提取主旋律"; checked: bridge.playbackDefaults.melody; onToggled: playScroll.applyOptions(); font.pixelSize: 13 }
+                                    CheckBox { id: skip; text: "跳过音域外音"; checked: bridge.playbackDefaults.skip; onToggled: playScroll.applyOptions(); font.pixelSize: 13 }
                                 }
+                                CheckBox { id: autoContinue; text: "演奏中切歌后自动继续"; checked: bridge.playbackDefaults.auto_continue; onToggled: playScroll.applyOptions(); font.pixelSize: 13 }
                                 RowLayout {
                                     ComboBox { id: target; Layout.fillWidth: true; model: bridge.windowList; textRole: "title"; currentIndex: -1; displayText: currentIndex<0 ? "选择游戏窗口" : currentText; onActivated: playScroll.applyOptions() }
                                     ActionButton { text: "刷新"; onClicked: { bridge.refreshWindows(); target.currentIndex=-1; playScroll.applyOptions() } }
@@ -314,7 +332,12 @@ ApplicationWindow {
                             Layout.fillWidth: true; Layout.preferredHeight: 340
                             ColumnLayout {
                                 anchors.fill: parent; spacing: 10
-                                Label { text: "播放列表"; color: "#17343b"; font.pixelSize: 18; font.bold: true }
+                                RowLayout {
+                                    Label { text: "播放列表"; color: "#17343b"; font.pixelSize: 18; font.bold: true }
+                                    Item { Layout.fillWidth: true }
+                                    ToolButton { text: "↑"; onClicked: bridge.moveSong(-1) }
+                                    ToolButton { text: "↓"; onClicked: bridge.moveSong(1) }
+                                }
                                 Label { visible: bridge.playlist.length===0; text: "添加曲谱，或载入练习曲\n两个模块都可独立使用。"; color: "#70898e"; font.pixelSize: 13; lineHeight: 1.5 }
                                 ListView {
                                     Layout.fillWidth: true; Layout.fillHeight: true; clip: true; spacing: 6; model: bridge.playlist

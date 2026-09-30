@@ -121,7 +121,8 @@ class Score:
         track.append(mido.MetaMessage("set_tempo", tempo=1_000_000))
         events = []
         for n in self.notes:
-            events.extend([(round(n.start_ms), 1, n), (round(n.end_ms), 0, n)])
+            start_tick = round(n.start_ms)
+            events.extend([(start_tick, 1, n), (max(start_tick+1, round(n.end_ms)), 0, n)])
         previous = 0
         for at, on, n in sorted(events, key=lambda e: (e[0], e[1])):
             track.append(mido.Message("note_on" if on else "note_off", note=n.midi_pitch,

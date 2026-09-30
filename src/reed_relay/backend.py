@@ -27,6 +27,7 @@ class Backend(QObject):
     playlistChanged = Signal()
     issuesChanged = Signal()
     windowsChanged = Signal()
+    selectionChanged = Signal()
     report = Signal(str, object)
     hotkeyReceived = Signal(str)
 
@@ -43,6 +44,13 @@ class Backend(QObject):
         self._progress, self._active_pitch, self._active_key = 0., -1, ""
         self._preview, self._speed, self._delay, self._transpose = True, 1., 3., 0
         self._melody, self._skip, self._target = False, False, -1
+        self._auto_continue = False
+        self._initial_options = {"speed":100,"delay":3,"transpose":0,"melody":False,"skip":False,"auto_continue":False}
+        try:
+            pref_path=self.data_dir/"preferences.json"
+            if pref_path.exists(): self._initial_options.update(json.loads(pref_path.read_text(encoding="utf-8")))
+        except (ValueError,OSError):
+            pass
         self._tune, self._stream, self._mic_queue = {}, None, queue.Queue(maxsize=2)
         self._busy, self._conversion_progress, self._audio_path, self._waveform = False, 0., "", []
         self._conversion_cancel = threading.Event()
@@ -84,6 +92,8 @@ class Backend(QObject):
 
     @Property(str, constant=True)
     def appMode(self): return self.mode
+    @Property("QVariantMap", constant=True)
+    def playbackDefaults(self): return self._initial_options
     @Property(str, notify=changed)
     def message(self): return self._message
     @Property(str, notify=changed)
@@ -131,7 +141,7 @@ class Backend(QObject):
     def canUndo(self): return bool(self._undo)
     @Property(bool, notify=changed)
     def canRedo(self): return bool(self._redo)
-    @Property(int, notify=changed)
+    @Property(int, notify=selectionChanged)
     def selectedNote(self): return self._selected_note
     @Property(int, notify=changed)
     def queuedCount(self): return len(self._audio_queue)
@@ -172,6 +182,7 @@ class Backend(QObject):
         elif kind == "converted":
             self._score, path = value
             self._selected_note, self._undo, self._redo = -1, [], []
+            self.selectionChanged.emit()
             self._audio_path = self._score.source_file
             self._message = f"已完成并保存：{path}"
             self._check()
@@ -181,6 +192,10 @@ class Backend(QObject):
             self._media.setSource(QUrl.fromLocalFile(str(value)))
             self._loop_start, self._loop_end, self._loop_enabled = 0, 0, False
             self._media.play()
+            for old in self.data_dir.glob("audition_*.wav"):
+                if old != value:
+                    try: old.unlink()
+                    except OSError: pass
         self.changed.emit()
 
     @Slot(str)
@@ -227,16 +242,29 @@ class Backend(QObject):
 
     @Slot(int)
     def selectSong(self, index):
-        if not 0 <= index < len(self._playlist): return
+        if not 0 <= index < len(self._playlist): return False
         self.stop()
         try: self._add_score(self._playlist[index]["path"])
-        except Exception as e: self._error(e)
+        except Exception as e:
+            self._error(e)
+            return False
         self.changed.emit()
+        return True
 
     @Slot(int)
     def stepSong(self, delta):
         if self._playlist:
-            self.selectSong((self._selected + delta) % len(self._playlist))
+            resume=self.engine.running and self._auto_continue
+            loaded=self.selectSong((self._selected + delta) % len(self._playlist))
+            if resume and loaded: self.toggle()
+
+    @Slot(int)
+    def moveSong(self, delta):
+        old=self._selected;new=old+delta
+        if 0<=old<len(self._playlist) and 0<=new<len(self._playlist):
+            self._playlist[old],self._playlist[new]=self._playlist[new],self._playlist[old]
+            self._selected=new
+            self._save_playlist();self.playlistChanged.emit();self.changed.emit()
 
     @Slot(int)
     def removeSong(self, index):
@@ -252,10 +280,14 @@ class Backend(QObject):
             self.playlistChanged.emit()
             self.changed.emit()
 
-    @Slot(bool, float, float, int, bool, bool, int)
-    def configurePlayer(self, preview, speed, delay, transpose, melody, skip, target):
+    @Slot(bool, float, float, int, bool, bool, int, bool)
+    def configurePlayer(self, preview, speed, delay, transpose, melody, skip, target, auto_continue=False):
         self._preview, self._speed, self._delay, self._transpose = preview, speed, delay, transpose
         self._melody, self._skip, self._target = melody, skip, target
+        self._auto_continue=auto_continue
+        try:
+            atomic_json(self.data_dir/"preferences.json",{"speed":round(speed*100),"delay":delay,"transpose":transpose,"melody":melody,"skip":skip,"auto_continue":auto_continue})
+        except OSError as e: self._message=f"无法保存演奏偏好：{e}"
         self._check()
         self.changed.emit()
 
@@ -267,6 +299,8 @@ class Backend(QObject):
         try:
             if not self._preview and not self._profile.calibrated:
                 raise ValueError("请在调音页核对实际音高并确认校准，再启用游戏输入")
+            if not self._preview and not self.hotkeys.ready:
+                raise ValueError("全局热键尚未就绪，请先解决底部显示的热键冲突")
             if not self._preview and not 0 <= self._target < len(self._windows):
                 raise ValueError("请选择目标游戏窗口")
             plan = make_plan(self._prepared_score(), self._profile, self._transpose, self._skip)
@@ -405,14 +439,23 @@ class Backend(QObject):
         def worker():
             try:
                 from .converter.transcribe import transcribe
+                from .converter.audio import Cancelled
+                failures=[]
                 for i, path in enumerate(paths):
                     def progress(value, message, info):
                         data = (info or {}) | {"path": path}
                         self.report.emit("conversion", ((i+value)/len(paths), f"{i+1}/{len(paths)}  {message}", data))
-                    score = transcribe(path, melody, self._conversion_cancel, progress)
-                    target = self.data_dir / "conversions" / (Path(path).stem[:100] + "_" + uuid.uuid4().hex[:6] + ".reedscore.json")
-                    score.save(target)
-                    self.report.emit("converted", (score, str(target)))
+                    try:
+                        score = transcribe(path, melody, self._conversion_cancel, progress)
+                        target = self.data_dir / "conversions" / (Path(path).stem[:100] + "_" + uuid.uuid4().hex[:6] + ".reedscore.json")
+                        score.save(target)
+                        self.report.emit("converted", (score, str(target)))
+                    except Cancelled:
+                        raise
+                    except Exception as e:
+                        failures.append(f"{Path(path).name}: {e}")
+                if failures:
+                    self.report.emit("error",f"批量完成：成功 {len(paths)-len(failures)}/{len(paths)}；失败："+"；".join(failures))
             except Exception as e: self.report.emit("error", str(e))
             finally: self.report.emit("job_done", None)
         self._conversion_thread = threading.Thread(target=worker, daemon=True)
@@ -437,6 +480,7 @@ class Backend(QObject):
             score = Score.from_midi(path) if path.lower().endswith((".mid", ".midi")) else Score.load(path)
             self._score, self._audio_path = score, score.source_file
             self._undo, self._redo, self._selected_note = [], [], -1
+            self.selectionChanged.emit()
             self._waveform = score.metadata.get("waveform", [])
             self._audio_queue = [score.source_file] if Path(score.source_file).is_file() else []
             self._check()
@@ -451,9 +495,22 @@ class Backend(QObject):
         if path.exists(): self.loadProjectPath(str(path))
         else: self._error("没有可恢复的自动保存工程")
 
+    @Slot()
+    def relinkAudio(self):
+        if self._busy: return
+        path,_=QFileDialog.getOpenFileName(None,"重新关联当前曲谱的原音频","","音频 (*.mp3 *.wav *.flac *.ogg *.m4a)")
+        if path:
+            self.stopAudio()
+            self._score.source_file=path
+            self._audio_path=path
+            self._audio_queue=[path]
+            self._message="已重新关联原音频"
+            self._edited()
+
     @Slot(int)
     def selectNote(self, index):
         self._selected_note = index if 0 <= index < len(self._score.notes) else -1
+        self.selectionChanged.emit()
         self.changed.emit()
 
     def _remember(self):
@@ -467,6 +524,7 @@ class Backend(QObject):
         try: self._score.save(self.data_dir / "autosave.reedscore.json")
         except Exception as e: self._message = f"自动保存失败：{e}"
         self.scoreChanged.emit()
+        self.selectionChanged.emit()
         self.changed.emit()
 
     @Slot(int, float, float, int)

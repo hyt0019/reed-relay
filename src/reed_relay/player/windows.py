@@ -119,6 +119,7 @@ class Hotkeys:
         self.callback, self.report = callback, report
         self.stop_event = threading.Event()
         self.thread = None
+        self.ready = False
 
     def start(self, bindings):
         self.close()
@@ -141,6 +142,7 @@ class Hotkeys:
                     raise RuntimeError(f"{binding} 被其他程序占用，请修改后重新保存")
                 registered.append(i)
                 actions[i] = action
+            self.ready = True
             self.report("全局热键已注册")
             msg = w.MSG()
             while not self.stop_event.wait(.01):
@@ -149,10 +151,12 @@ class Hotkeys:
         except Exception as e:
             self.report(str(e))
         finally:
+            self.ready = False
             for i in registered:
                 api.UnregisterHotKey(None, i)
 
     def close(self):
+        self.ready = False
         self.stop_event.set()
         if self.thread:
             self.thread.join(timeout=2)
