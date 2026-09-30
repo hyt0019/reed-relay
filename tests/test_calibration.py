@@ -121,3 +121,12 @@ def test_custom_keys_and_no_combos_produce_matching_instructions():
     assert len(guide.steps)==14
     assert guide.expected=={"A"}
     assert guide.instruction()=="A"
+
+
+def test_gaps_in_audio_cannot_accumulate_as_continuous_stable_tone():
+    guide=GuidedCalibration(Profile(),0)
+    now=arm(guide,4)
+    guide.tick(now,{"Z"},True)
+    for delay in (.5,1.5,2.5):
+        guide.tick(now+delay,{"Z"},True,{"frequency":440,"pitch":60,"cents":0})
+    assert not guide.values and len(guide.samples)==1

@@ -114,6 +114,36 @@ def focus_guard(window):
     return check
 
 
+def window_alive(window):
+    api, pid = user32(), w.DWORD()
+    if not api.IsWindow(window["handle"]): return False
+    api.GetWindowThreadProcessId(window["handle"], c.byref(pid))
+    return pid.value == window["pid"]
+
+
+def held_controls(keys):
+    """Read only the configured instrument controls; do not consume key events."""
+    api = user32()
+    api.GetAsyncKeyState.argtypes = (c.c_int,)
+    api.GetAsyncKeyState.restype = w.SHORT
+    mouse = {"MOUSE_LEFT":1, "MOUSE_RIGHT":2, "MOUSE_MIDDLE":4}
+    return {key for key in keys if api.GetAsyncKeyState(mouse[key] if key in mouse else VK[key]) & 0x8000}
+
+
+def monitor_name(window):
+    class MONITORINFOEX(c.Structure):
+        _fields_ = [("cbSize",w.DWORD),("rcMonitor",w.RECT),("rcWork",w.RECT),
+                    ("dwFlags",w.DWORD),("szDevice",w.WCHAR*32)]
+    api = user32()
+    api.MonitorFromWindow.argtypes = (w.HWND,w.DWORD)
+    api.MonitorFromWindow.restype = w.HANDLE
+    api.GetMonitorInfoW.argtypes = (w.HANDLE,c.POINTER(MONITORINFOEX))
+    info = MONITORINFOEX()
+    info.cbSize = c.sizeof(info)
+    monitor = api.MonitorFromWindow(window["handle"],2)
+    return info.szDevice if api.GetMonitorInfoW(monitor,c.byref(info)) else ""
+
+
 class Hotkeys:
     def __init__(self, callback, report):
         self.callback, self.report = callback, report

@@ -16,6 +16,7 @@ from .backend import Backend
 def run(mode):
     parser = argparse.ArgumentParser()
     parser.add_argument("--screenshot")
+    parser.add_argument("--overlay-demo", action="store_true", help="仅显示调音悬浮窗示例，不采集或保存")
     parser.add_argument("--page", default="main")
     parser.add_argument("--demo", action="store_true")
     parser.add_argument("--no-hotkeys", action="store_true")
@@ -62,19 +63,35 @@ def run(mode):
     if args.demo: backend.loadDemo()
     if args.score: backend.loadProjectPath(args.score)
     engine = QQmlApplicationEngine()
+    engine.quit.connect(app.quit)
     engine.rootContext().setContextProperty("bridge", backend)
     engine.rootContext().setContextProperty("initialPage", args.page)
     engine.load(QUrl.fromLocalFile(str(Path(__file__).parent / "ui" / "Main.qml")))
     if not engine.rootObjects():
         backend.close()
         return 1
+    engine.load(QUrl.fromLocalFile(str(Path(__file__).parent / "ui" / "CalibrationOverlay.qml")))
+    if len(engine.rootObjects())<2:
+        backend.close()
+        return 1
+    overlay = engine.rootObjects()[1]
+    from .overlay import position_overlay
+    placement = [None]
+    def place_overlay():
+        value = backend.calibration
+        new = (value["visible"],value["monitor"],value["position"])
+        if new != placement[0] and value["visible"]:
+            position_overlay(overlay,value["monitor"],value["position"])
+        placement[0] = new
+    backend.calibrationChanged.connect(place_overlay)
+    if args.overlay_demo: backend.previewCalibration()
     app.aboutToQuit.connect(backend.close)
     if args.screenshot:
         def capture():
             destination = Path(args.screenshot)
             destination.parent.mkdir(parents=True, exist_ok=True)
             try:
-                ok = engine.rootObjects()[0].grabWindow().save(str(destination))
+                ok = (overlay if args.overlay_demo else engine.rootObjects()[0]).grabWindow().save(str(destination))
                 app.exit(0 if ok else 2)
             except Exception:
                 app.exit(2)

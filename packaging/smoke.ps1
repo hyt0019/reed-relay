@@ -23,11 +23,13 @@ try {
     $env:PYTHONPATH=''
     Invoke-SmokeApp '.\dist\ReedRelay-Player\ReedRelay-Player.exe' @('--demo','--screenshot','output/smoke/player.png')
     Invoke-SmokeApp '.\dist\ReedRelay-Player\ReedRelay-Player.exe' @('--page','settings','--screenshot','output/smoke/tuning.png')
+    Invoke-SmokeApp '.\dist\ReedRelay-Player\ReedRelay-Player.exe' @('--overlay-demo','--screenshot','output/smoke/calibration-overlay.png')
     Invoke-SmokeApp '.\dist\ReedRelay-Converter\ReedRelay-Converter.exe' @('--transcribe','output/smoke/calibration.wav','--output','output/smoke/score.json')
     $score = Get-Content 'output\smoke\score.json' -Raw -Encoding UTF8 | ConvertFrom-Json
     if ($score.notes.Count -lt 8 -or $score.duration_ms -lt 6000) { throw 'Incomplete transcription in frozen converter.' }
     Invoke-SmokeApp '.\dist\ReedRelay-Converter\ReedRelay-Converter.exe' @('--score','output/smoke/score.json','--screenshot','output/smoke/converter.png')
-    foreach ($path in @('player.png','tuning.png','converter.png')) {
+    Invoke-SmokeApp '.\dist\ReedRelay-Converter\ReedRelay-Converter.exe' @('--overlay-demo','--screenshot','output/smoke/converter-overlay.png')
+    foreach ($path in @('player.png','tuning.png','converter.png','calibration-overlay.png','converter-overlay.png')) {
         if ((Get-Item (Join-Path 'output\smoke' $path)).Length -lt 10000) { throw "Invalid screenshot: $path" }
     }
     Write-Output "Both portable applications passed. Transcription: $($score.notes.Count) notes. Captures: output/smoke."

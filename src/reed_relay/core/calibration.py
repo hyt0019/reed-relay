@@ -102,7 +102,7 @@ class GuidedCalibration:
             self.samples.clear()
             self.hint = "音高偏差较大，请检查背景声音或 A4 参考频率"
             return
-        if self.samples and (pitch != self.samples[-1][0] or abs(cents-self.samples[-1][1])>20):
+        if self.samples and (now-self.samples[-1][2]>.6 or pitch != self.samples[-1][0] or abs(cents-self.samples[-1][1])>20):
             self.samples.clear()
         self.samples.append((pitch, cents, now))
         self.samples = self.samples[-3:]

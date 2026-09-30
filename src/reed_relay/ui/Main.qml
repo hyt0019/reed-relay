@@ -10,6 +10,7 @@ ApplicationWindow {
     minimumWidth: 1060
     minimumHeight: 740
     visible: true
+    onClosing: Qt.quit()
     title: (bridge.appMode === "player" ? "风箱" : "听谱") + " · ReedRelay"
     color: "#f5f8f3"
     palette.highlight: "#2362ba"
@@ -20,7 +21,8 @@ ApplicationWindow {
     function reloadDraft() {
         draft = JSON.parse(JSON.stringify(bridge.profile))
         sceneName.text=draft.name; reference.text=String(draft.reference_hz)
-        calibrated.checked=draft.calibrated; combine.checked=draft.combinations.length>4
+        calibrated.checked=draft.calibrated
+        combineLower.checked=hasCombo(0,1); combineUpper.checked=hasCombo(1,2)
         for(let i=0;i<8;i++) {
             keyRows.itemAt(i).keyValue=draft.keys[i]
             keyRows.itemAt(i).pitchValue=String(draft.pitches[i])
@@ -34,16 +36,25 @@ ApplicationWindow {
     }
     function noteName(n) { return ["C","C♯","D","D♯","E","F","F♯","G","G♯","A","A♯","B"][((n%12)+12)%12] + (Math.floor(n/12)-1) }
     function clock(ms) { let s=Math.floor(ms/1000); return Math.floor(s/60).toString().padStart(2,"0")+":"+(s%60).toString().padStart(2,"0") }
-    function saveDraft() {
+    function isCombo(c,a,b) { return c.length===2 && c.indexOf(a)>=0 && c.indexOf(b)>=0 }
+    function hasCombo(a,b) { return draft.combinations.some(c => isCombo(c,a,b)) }
+    function profileDraft() {
         let value = JSON.parse(JSON.stringify(draft))
         value.name = sceneName.text
         value.reference_hz = Number(reference.text)
         value.calibrated = calibrated.checked
         for (let i=0;i<8;i++) { value.keys[i]=keyRows.itemAt(i).keyValue; value.pitches[i]=Number(keyRows.itemAt(i).pitchValue) }
         for (let i=0;i<3;i++) { value.modifiers[i].key=modRows.itemAt(i).keyValue; value.modifiers[i].semitones=Number(modRows.itemAt(i).shiftValue) }
-        value.combinations = combine.checked ? [[],[0],[1],[2],[0,1],[1,2]] : [[],[0],[1],[2]]
+        value.combinations = value.combinations.filter(c => !isCombo(c,0,1) && !isCombo(c,1,2))
+        if(combineLower.checked)value.combinations.push([0,1])
+        if(combineUpper.checked)value.combinations.push([1,2])
         value.hotkeys={toggle:toggleHotkey.text,previous:previousHotkey.text,next:nextHotkey.text,emergency:emergencyHotkey.text}
-        bridge.saveProfile(JSON.stringify(value))
+        return value
+    }
+    function saveDraft() { bridge.saveProfile(JSON.stringify(profileDraft())) }
+    Connections {
+        target: bridge
+        function onProfileChanged() { root.reloadDraft() }
     }
     header: Rectangle {
         height: 83
@@ -101,7 +112,7 @@ ApplicationWindow {
                             Label { text: "先测音，再对应实际按键。默认音高只是待校准模板。"; color: "#6a8287"; font.pixelSize: 13 }
                         }
                         Item { Layout.fillWidth: true }
-                        ActionButton { text: "导入场景"; onClicked: { bridge.importProfile(); root.reloadDraft() } }
+                        ActionButton { text: "导入场景"; enabled: !bridge.calibrationActive; onClicked: { bridge.importProfile(); root.reloadDraft() } }
                         ActionButton { text: "导出已保存场景"; onClicked: bridge.exportProfile() }
                     }
                     Panel {
@@ -112,31 +123,33 @@ ApplicationWindow {
                                 Layout.fillWidth: true; spacing: 12
                                 Label { text: "场景与参考频率"; font.pixelSize: 17; font.bold: true; color: "#17343b" }
                                 RowLayout {
-                                    Field { id: sceneName; Layout.fillWidth: true; text: root.draft.name; placeholderText: "为场景起个名字" }
+                                    Field { id: sceneName; Layout.fillWidth: true; text: root.draft.name; placeholderText: "为场景起个名字"; enabled: !bridge.calibrationActive }
                                     Label { text: "A4"; color: "#617c83" }
-                                    Field { id: reference; Layout.preferredWidth: 80; text: String(root.draft.reference_hz); validator: DoubleValidator { bottom: 400; top: 480 } }
+                                    Field { id: reference; Layout.preferredWidth: 80; text: String(root.draft.reference_hz); enabled: !bridge.calibrationActive; validator: DoubleValidator { bottom: 400; top: 480 } }
                                     Label { text: "Hz"; color: "#617c83" }
                                 }
                                 RowLayout {
                                     Label { text: "测音来源"; color: "#617c83" }
                                     ComboBox {
                                         Layout.fillWidth: true
+                                        enabled: !bridge.calibrationActive
                                         model: ["电脑声音（耳机 / 扬声器）", "麦克风"]
                                         currentIndex: bridge.captureSource==="system" ? 0 : 1
                                         onActivated: bridge.setCaptureSource(currentIndex===0 ? "system" : "microphone")
                                     }
-                                    ActionButton { text: bridge.listening ? "停止测音" : "开始测音"; primary: !bridge.listening; enabled: bridge.listening || bridge.captureSource!=="system" || bridge.captureDevice>=0; onClicked: bridge.toggleTuning() }
+                                    ActionButton { text: bridge.calibrationActive ? "取消引导" : bridge.listening ? "停止测音" : "开始测音"; primary: !bridge.listening; enabled: bridge.listening || bridge.captureSource!=="system" || bridge.captureDevice>=0; onClicked: bridge.toggleTuning() }
                                 }
                                 RowLayout {
                                     visible: bridge.captureSource==="system"
                                     ComboBox {
                                         Layout.fillWidth: true; Layout.minimumWidth: 150
+                                        enabled: !bridge.calibrationActive
                                         model: bridge.captureDevices; textRole: "label"
                                         currentIndex: bridge.captureDevice
                                         displayText: currentIndex<0 ? "未找到输出设备" : currentText
                                         onActivated: bridge.setCaptureDevice(currentIndex)
                                     }
-                                    ActionButton { text: "刷新设备"; onClicked: bridge.refreshAudioDevices() }
+                                    ActionButton { text: "刷新设备"; enabled: !bridge.calibrationActive; onClicked: bridge.refreshAudioDevices() }
                                 }
                                 RowLayout {
                                     Label { text: "输入音量"; color: "#617c83"; font.pixelSize: 12 }
@@ -145,11 +158,11 @@ ApplicationWindow {
                                 }
                                 Label { Layout.fillWidth: true; text: bridge.captureStatus; wrapMode: Text.Wrap; color: "#43636a"; font.pixelSize: 12 }
                                 RowLayout {
-                                    ActionButton { text: "分析 WAV 单音"; onClicked: bridge.tuneFile() }
-                                    ActionButton { text: "试听 A4"; onClicked: bridge.playTone(69, Number(reference.text)) }
+                                    ActionButton { text: "分析 WAV 单音"; enabled: !bridge.calibrationActive; onClicked: bridge.tuneFile() }
+                                    ActionButton { text: "试听 A4"; enabled: !bridge.calibrationActive; onClicked: bridge.playTone(69, Number(reference.text)) }
                                 }
                                 Label { Layout.fillWidth: true; wrapMode: Text.Wrap; text: bridge.captureSource==="system" ? "采集所选设备上的所有声音，请暂停其他音乐或视频。声音仅用于本地测音。" : "使用 Windows 默认录音设备。点击开始测音后才会使用麦克风。"; color: "#7a8f91"; font.pixelSize: 11 }
-                                Label { Layout.fillWidth: true; wrapMode: Text.Wrap; text: "测音使用已保存的 A4；播放参考音会停止采集。"; color: "#7a8f91"; font.pixelSize: 11 }
+                                Label { Layout.fillWidth: true; wrapMode: Text.Wrap; text: "手动测音使用已保存的 A4；连续引导使用当前填写值。播放参考音会停止采集。"; color: "#7a8f91"; font.pixelSize: 11 }
                             }
                             Rectangle {
                                 Layout.preferredWidth: 245; Layout.preferredHeight: 142; radius: 12; color: "#173c48"
@@ -170,6 +183,32 @@ ApplicationWindow {
                     }
                     Panel {
                         Layout.leftMargin: 26; Layout.rightMargin: 26; Layout.fillWidth: true
+                        ColumnLayout {
+                            anchors.fill: parent; spacing: 12
+                            RowLayout {
+                                Label { text: "游戏内连续调音"; color: "#17343b"; font.pixelSize: 18; font.bold: true }
+                                Item { Layout.fillWidth: true }
+                                Label { text: "置顶提示 · 鼠标穿透 · 自动记录"; color: "#6f878a"; font.pixelSize: 12 }
+                            }
+                            Label { Layout.fillWidth: true; text: "先设置上方声音来源和下方键位。开始后切回游戏，跟随提示逐个长按；全部通过后自动备份并保存场景。"; wrapMode: Text.Wrap; color: "#55727a"; font.pixelSize: 13 }
+                            RowLayout {
+                                ComboBox { id: calibrationTarget; Layout.fillWidth: true; model: bridge.windowList; textRole: "title"; currentIndex: -1; displayText: currentIndex<0 ? "选择目标游戏窗口" : currentText; enabled: !bridge.calibrationActive }
+                                ActionButton { text: "刷新窗口"; enabled: !bridge.calibrationActive; onClicked: { bridge.refreshWindows(); calibrationTarget.currentIndex=-1 } }
+                                ComboBox { id: overlayPosition; model: ["右上角", "左上角", "下方居中"]; implicitWidth: 128; enabled: !bridge.calibrationActive }
+                                ActionButton { text: bridge.calibrationActive ? "取消引导" : "开始游戏内引导"; primary: !bridge.calibrationActive; onClicked: bridge.calibrationActive ? bridge.cancelCalibration() : bridge.startCalibration(JSON.stringify(root.profileDraft()),calibrationTarget.currentIndex,["top-right","top-left","bottom-center"][overlayPosition.currentIndex]) }
+                            }
+                            RowLayout {
+                                visible: bridge.calibration.visible
+                                Label { Layout.fillWidth: true; text: bridge.calibration.title+"  ·  "+bridge.calibration.hint; color: "#43636a"; wrapMode: Text.Wrap; font.pixelSize: 12 }
+                                ActionButton { text: bridge.calibration.paused ? "继续" : "暂停"; visible: bridge.calibrationActive; onClicked: bridge.calibrationAction("toggle") }
+                                ActionButton { text: "重测"; visible: bridge.calibrationActive; onClicked: bridge.calibrationAction("previous") }
+                            }
+                            Label { Layout.fillWidth: true; text: "建议无边框/窗口模式。按提示长按并松开即可；启停热键暂停，上一首热键重测，下一首热键跳过组合，紧急停止热键取消。"; wrapMode: Text.Wrap; color: "#7a8f91"; font.pixelSize: 11 }
+                        }
+                    }
+                    Panel {
+                        Layout.leftMargin: 26; Layout.rightMargin: 26; Layout.fillWidth: true
+                        enabled: !bridge.calibrationActive
                         ColumnLayout {
                             anchors.fill: parent; spacing: 16
                             RowLayout {
@@ -204,6 +243,7 @@ ApplicationWindow {
                         Layout.leftMargin: 26; Layout.rightMargin: 26; Layout.fillWidth: true
                         ColumnLayout {
                             anchors.fill: parent; spacing: 13
+                            enabled: !bridge.calibrationActive
                             Label { text: "鼠标修饰 · 按住生效，松开恢复"; color: "#17343b"; font.pixelSize: 17; font.bold: true }
                             RowLayout {
                                 spacing: 20
@@ -220,13 +260,18 @@ ApplicationWindow {
                                     }
                                 }
                             }
-                            CheckBox { id: combine; text: "允许降调+半音、升调+半音组合（确认游戏支持后开启）"; checked: root.draft.combinations.length>4; font.pixelSize: 13 }
+                            RowLayout {
+                                CheckBox { id: combineLower; text: "降调 + 半音"; checked: root.hasCombo(0,1); font.pixelSize: 13 }
+                                CheckBox { id: combineUpper; text: "升调 + 半音"; checked: root.hasCombo(1,2); font.pixelSize: 13 }
+                                Label { text: "仅启用已确认游戏支持的组合；连续引导会逐项验证。"; color: "#6f878a"; font.pixelSize: 12 }
+                            }
                         }
                     }
                     Panel {
                         Layout.leftMargin: 26; Layout.rightMargin: 26; Layout.fillWidth: true
                         ColumnLayout {
                             anchors.fill: parent; spacing: 12
+                            enabled: !bridge.calibrationActive
                             Label { text: "全局热键"; color: "#17343b"; font.pixelSize: 17; font.bold: true }
                             RowLayout {
                                 spacing: 14
@@ -244,9 +289,9 @@ ApplicationWindow {
                     }
                     RowLayout {
                         Layout.leftMargin: 26; Layout.rightMargin: 26; Layout.bottomMargin: 26; Layout.fillWidth: true
-                        CheckBox { id: calibrated; text: "我已核对基础音高、修饰音程和组合"; checked: root.draft.calibrated; font.pixelSize: 13 }
+                        CheckBox { id: calibrated; text: "我已核对基础音高、修饰音程和组合"; checked: root.draft.calibrated; enabled: !bridge.calibrationActive; font.pixelSize: 13 }
                         Item { Layout.fillWidth: true }
-                        ActionButton { text: "保存并应用场景"; primary: true; onClicked: root.saveDraft() }
+                        ActionButton { text: "保存并应用场景"; primary: true; enabled: !bridge.calibrationActive; onClicked: root.saveDraft() }
                     }
                 }
             }

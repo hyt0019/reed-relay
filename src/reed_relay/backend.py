@@ -17,8 +17,9 @@ from PySide6.QtWidgets import QFileDialog
 from reed_relay.core.score import Score, Note, atomic_json, pitch_name, extract_melody
 from reed_relay.core.profile import Profile, make_plan
 from reed_relay.core.tuning import tone, detect_frequency, describe_frequency
+from reed_relay.core.calibration import GuidedCalibration
 from reed_relay.player.engine import PlayerEngine, PreviewOutput
-from reed_relay.player.windows import Hotkeys, WindowsOutput, windows, focus_guard
+from reed_relay.player.windows import Hotkeys, WindowsOutput, windows, focus_guard, held_controls, window_alive, monitor_name
 
 
 class Backend(QObject):
@@ -30,6 +31,7 @@ class Backend(QObject):
     windowsChanged = Signal()
     selectionChanged = Signal()
     captureDevicesChanged = Signal()
+    calibrationChanged = Signal()
     report = Signal(str, object)
     hotkeyReceived = Signal(str)
 
@@ -65,6 +67,20 @@ class Backend(QObject):
         self._loop_start, self._loop_end, self._loop_enabled = 0, 0, False
         self._pending_seek = None
         self._no_hotkeys = no_hotkeys
+        self._closing = False
+        self._calibration = None
+        self._calibration_visible = False
+        self._calibration_target = None
+        self._calibration_monitor, self._calibration_position = "", "top-right"
+        self._calibration_focus = lambda: False
+        self._calibration_starting = False
+        self._calibration_deadline = 0.
+        self._calibration_timer = QTimer(self)
+        self._calibration_timer.setInterval(40)
+        self._calibration_timer.timeout.connect(self._tick_calibration)
+        self._overlay_hide_timer = QTimer(self)
+        self._overlay_hide_timer.setSingleShot(True)
+        self._overlay_hide_timer.timeout.connect(self.hideCalibration)
         self.engine = PlayerEngine(lambda kind, value: self.report.emit(kind, value))
         self.report.connect(self._handle_report)
         self.hotkeyReceived.connect(self._on_hotkey)
@@ -97,6 +113,16 @@ class Backend(QObject):
 
     @Property(str, constant=True)
     def appMode(self): return self.mode
+    @Property(bool, notify=calibrationChanged)
+    def calibrationActive(self): return self._calibration is not None and self._calibration.active
+    @Property("QVariantMap", notify=calibrationChanged)
+    def calibration(self):
+        value = self._calibration.snapshot() if self._calibration else {
+            "active":False,"phase":"idle","title":"尚未开始","instruction":"","hint":"",
+            "last_note":"","step":0,"total":0,"progress":0.,"stability":0.,"optional":False,"paused":False}
+        profile = self._calibration.original if self._calibration else self._profile
+        return value | {"visible":self._calibration_visible,"monitor":self._calibration_monitor,
+                        "position":self._calibration_position,"hotkeys":profile.hotkeys}
     @Property("QVariantMap", constant=True)
     def playbackDefaults(self): return self._initial_options
     @Property(str, notify=changed)
@@ -215,6 +241,9 @@ class Backend(QObject):
 
     @Slot(str)
     def _on_hotkey(self, action):
+        if self._calibration_visible:
+            self.calibrationAction(action)
+            return
         if action in ("toggle", "emergency"):
             self.stop() if action == "emergency" else self.toggle()
         elif action == "previous": self.stepSong(-1)
@@ -308,6 +337,9 @@ class Backend(QObject):
 
     @Slot()
     def toggle(self):
+        if self.calibrationActive:
+            self._error("请先完成或取消调音引导，再启动演奏")
+            return
         if self.engine.running:
             self.stop()
             return
@@ -342,6 +374,9 @@ class Backend(QObject):
 
     @Slot(str)
     def saveProfile(self, raw):
+        if self.calibrationActive:
+            self._error("调音引导进行中；请先完成或取消")
+            return
         try:
             self.stop()
             new_profile = Profile.from_dict(json.loads(raw))
@@ -410,6 +445,12 @@ class Backend(QObject):
 
     @Slot()
     def stopTuning(self):
+        if self.calibrationActive:
+            self.cancelCalibration()
+            return
+        self._stop_capture()
+
+    def _stop_capture(self):
         self._mic_timer.stop()
         stream, loopback = self._stream, self._loopback
         self._stream = self._loopback = None
@@ -468,7 +509,10 @@ class Backend(QObject):
                 while not self._mic_queue.empty():
                     latest = self._mic_queue.get_nowait()
         except Exception as e:
-            self.stopTuning()
+            if self.calibrationActive:
+                self._calibration.fail(f"声音采集已中断：{e}；原场景保持不变")
+                self._end_calibration()
+            else: self.stopTuning()
             self._capture_status = f"采集已中断：{e}"
             self._error(self._capture_status)
             return
@@ -477,13 +521,127 @@ class Backend(QObject):
             rms = float(np.sqrt(np.mean(np.asarray(latest, dtype=float)**2)))
             self._capture_level = max(0., min(1., (20*np.log10(max(rms, 1e-6))+60)/60))
             hz = detect_frequency(latest, rate)
-            self._tune = describe_frequency(hz, self._profile.reference_hz) if hz else {"name": "等待稳定音", "cents": 0, "frequency": 0}
+            reference = self._calibration.original.reference_hz if self.calibrationActive else self._profile.reference_hz
+            self._tune = describe_frequency(hz, reference) if hz else {"name": "等待稳定音", "cents": 0, "frequency": 0}
             self._capture_status = "已检测到单音；可填写到下方对应按键" if hz else ("声音较弱或静音，请检查所选设备与游戏音量" if rms<.003 else "已收到声音，请单独弹奏一个音并减少伴奏")
+            if self.calibrationActive: self._tick_calibration(self._tune)
         elif time.monotonic() - self._last_audio_time > 1:
             self._tune = {"name": "等待声音", "cents": 0, "frequency": 0}
             self._capture_level = 0.
             self._capture_status = "尚未收到声音，请确认游戏输出到所选设备；设备变化后请刷新"
+            if self.calibrationActive: self._tick_calibration(self._tune)
         self.changed.emit()
+
+    @Slot(str, int, str)
+    def startCalibration(self, raw, window_index, position):
+        if self.calibrationActive: return
+        try:
+            if self._busy: raise ValueError("请等待音频处理完成，再开始引导")
+            if self._no_hotkeys: raise ValueError("此启动模式禁用了全局热键，无法开始游戏内引导")
+            if not 0 <= window_index < len(self._windows): raise ValueError("请先选择目标游戏窗口")
+            profile = Profile.from_dict(json.loads(raw))
+            target = dict(self._windows[window_index])
+            if not window_alive(target): raise ValueError("目标窗口已关闭，请刷新窗口列表")
+            self.stop()
+            self.stopTuning()
+            self.toggleTuning()
+            if not self.listening: return
+            self._overlay_hide_timer.stop()
+            self._calibration = GuidedCalibration(profile, time.monotonic())
+            self._calibration_target = target
+            self._calibration_focus = focus_guard(target)
+            self._calibration_monitor = monitor_name(target)
+            self._calibration_position = position if position in ("top-left","top-right","bottom-center") else "top-right"
+            self._calibration_visible, self._calibration_starting = True, True
+            self._calibration_deadline = time.monotonic()+3
+            self.hotkeys.start(profile.hotkeys)
+            self._calibration.hint = "正在准备全局热键，请切回游戏"
+            self._calibration_timer.start()
+            self._message = "调音引导已启动，请按悬浮提示操作；全部完成后自动保存"
+            self.calibrationChanged.emit()
+            self.changed.emit()
+        except Exception as e:
+            if self.calibrationActive:
+                self._calibration.fail(str(e))
+                self._end_calibration()
+            else: self._stop_capture()
+            self._error(e)
+
+    def _tick_calibration(self, sample=None):
+        if not self.calibrationActive: return
+        now = time.monotonic()
+        try:
+            if self._calibration_starting:
+                if not self.hotkeys.ready:
+                    if now>self._calibration_deadline:
+                        raise RuntimeError("全局热键未就绪："+self._hotkey_status)
+                    return
+                self._calibration_starting = False
+                self._calibration.deadline = now+3
+            if not self.hotkeys.ready: raise RuntimeError("全局热键已失效，请重新开始引导")
+            if not self.listening: raise RuntimeError("声音采集已停止")
+            if not window_alive(self._calibration_target): raise RuntimeError("目标游戏窗口已关闭")
+            self._calibration.tick(now, held_controls(self._calibration.controls), self._calibration_focus(), sample)
+            if self._calibration.phase == "done":
+                result = self._calibration.result
+                self._profile.save(self.data_dir/"profile.before-calibration.json")
+                result.save(self.data_dir/"profile.json")
+                self._profile = result
+                self.profileChanged.emit()
+                self._check()
+                self._calibration.hint = "校准已保存，可以继续留在游戏中；提示稍后自动收起"
+                self._end_calibration()
+            else: self.calibrationChanged.emit()
+        except Exception as e:
+            self._calibration.fail(f"{e}；原场景保持不变")
+            self._end_calibration()
+
+    def _end_calibration(self):
+        self._calibration_timer.stop()
+        self._calibration_starting = False
+        self._stop_capture()
+        self._message = self._calibration.hint
+        if not self._closing:
+            self._overlay_hide_timer.start(8000)
+        self.calibrationChanged.emit()
+        self.changed.emit()
+
+    @Slot(str)
+    def calibrationAction(self, action):
+        if not self._calibration: return
+        if not self.calibrationActive:
+            if action == "emergency": self.hideCalibration()
+            return
+        if action == "emergency": self.cancelCalibration(); return
+        if action == "toggle": self._calibration.toggle_pause()
+        elif action == "previous": self._calibration.rewind()
+        elif action == "next": self._calibration.skip(time.monotonic())
+        self.calibrationChanged.emit()
+
+    @Slot()
+    def cancelCalibration(self):
+        if self.calibrationActive:
+            self._calibration.cancel()
+            self._end_calibration()
+        else: self.hideCalibration()
+
+    @Slot()
+    def hideCalibration(self):
+        if self.calibrationActive: return
+        self._calibration_visible = False
+        self._overlay_hide_timer.stop()
+        if not self._closing and not self._no_hotkeys:
+            if self.mode == "player": self.hotkeys.start(self._profile.hotkeys)
+            else: self.hotkeys.close()
+        self.calibrationChanged.emit()
+
+    def previewCalibration(self):
+        """Screenshot-only preview: no recording, key polling or file changes."""
+        self._calibration = GuidedCalibration(self._profile, time.monotonic())
+        self._calibration.phase = "listen"
+        self._calibration.hint = "按住提示按键约 1 秒，识别稳定后自动进入下一步"
+        self._calibration_visible = True
+        self.calibrationChanged.emit()
 
     @Slot()
     def tuneFile(self):
@@ -781,6 +939,12 @@ class Backend(QObject):
         if self._media: self._media.stop()
 
     def close(self):
+        self._closing = True
+        self.cancelCalibration()
+        self._calibration_timer.stop()
+        self._overlay_hide_timer.stop()
+        self._calibration_visible = False
+        self.calibrationChanged.emit()
         self._conversion_cancel.set()
         self.stopAudio()
         if self._conversion_thread and self._conversion_thread.is_alive():
