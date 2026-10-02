@@ -4,6 +4,7 @@ import QtQuick.Layouts
 
 ScrollView {
     id: page
+    signal requestAudition()
     clip: true
     contentWidth: availableWidth
     property var selectedData: bridge.selectedNote>=0 && bridge.selectedNote<bridge.notes.length ? bridge.notes[bridge.selectedNote] : null
@@ -62,7 +63,7 @@ ScrollView {
                     Label { Layout.fillWidth: true; text: bridge.title; color: "#17343b"; font.pixelSize: 19; font.bold: true; elide: Text.ElideRight }
                     Muted { text: bridge.notes.length+" 音符    "+(bridge.duration/1000).toFixed(1)+" 秒" }
                     ActionButton { text: "试听原音"; enabled: !bridge.busy && bridge.audioPath!==""; onClicked: bridge.auditionOriginal(loop.checked) }
-                    ActionButton { text: "试听曲谱"; enabled: !bridge.busy && bridge.notes.length>0; onClicked: bridge.auditionScore() }
+                    ActionButton { objectName:"converterAudition";text: "口琴试听"; enabled: !bridge.busy && bridge.notes.length>0; onClicked: { page.requestAudition(); bridge.auditionScore() } }
                     ActionButton { text: "停止"; onClicked: bridge.stopAudio() }
                 }
                 RowLayout {

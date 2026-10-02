@@ -20,6 +20,8 @@ from reed_relay.core.tuning import tone, detect_frequency, describe_frequency
 from reed_relay.core.calibration import GuidedCalibration
 from reed_relay.player.engine import PlayerEngine, PreviewOutput
 from reed_relay.player.windows import Hotkeys, WindowsOutput, windows, focus_guard, held_controls, window_alive, monitor_name
+from reed_relay.audition import Audition
+from reed_relay.binding import BindingCapture
 
 
 class Backend(QObject):
@@ -50,11 +52,15 @@ class Backend(QObject):
         self._melody, self._skip, self._target = False, False, -1
         self._auto_continue = False
         self._initial_options = {"speed":100,"delay":3,"transpose":0,"melody":False,"skip":False,"auto_continue":False}
+        self._long_policy, self._repeat_gap = "hold", 35.
         try:
             pref_path=self.data_dir/"preferences.json"
             if pref_path.exists(): self._initial_options.update(json.loads(pref_path.read_text(encoding="utf-8")))
         except (ValueError,OSError):
             pass
+        self._long_policy = self._initial_options.get("long_policy", "hold")
+        self._repeat_gap = self._initial_options.get("repeat_gap", 35.)
+        self._initial_options.update(long_policy=self._long_policy, repeat_gap=self._repeat_gap)
         self._tune, self._stream, self._mic_queue = {}, None, queue.Queue(maxsize=2)
         self._capture_source, self._capture_devices, self._capture_device = "system", [], -1
         self._loopback, self._capture_level, self._last_audio_time = None, 0., 0.
@@ -82,6 +88,13 @@ class Backend(QObject):
         self._overlay_hide_timer.setSingleShot(True)
         self._overlay_hide_timer.timeout.connect(self.hideCalibration)
         self.engine = PlayerEngine(lambda kind, value: self.report.emit(kind, value))
+        self.audition = Audition(self.data_dir, self)
+        self.audition.message.connect(self._error)
+        self.scoreChanged.connect(lambda: self.audition.reset_score(self._score.duration_ms))
+        self.binding = BindingCapture(self)
+        self.binding.started.connect(self._begin_binding)
+        self.binding.ended.connect(self._restore_hotkeys)
+        self.binding.captured.connect(self._capture_binding)
         self.report.connect(self._handle_report)
         self.hotkeyReceived.connect(self._on_hotkey)
         self.hotkeys = Hotkeys(self.hotkeyReceived.emit, lambda msg: self.report.emit("hotkeys", msg))
@@ -113,6 +126,10 @@ class Backend(QObject):
 
     @Property(str, constant=True)
     def appMode(self): return self.mode
+    @Property(QObject, constant=True)
+    def auditionController(self): return self.audition
+    @Property(QObject, constant=True)
+    def bindingController(self): return self.binding
     @Property(bool, notify=calibrationChanged)
     def calibrationActive(self): return self._calibration is not None and self._calibration.active
     @Property("QVariantMap", notify=calibrationChanged)
@@ -198,10 +215,47 @@ class Backend(QObject):
 
     def _check(self):
         try:
-            self._issues = make_plan(self._prepared_score(), self._profile, self._transpose, self._skip).issues
+            self._issues = self._plan().issues
         except Exception as e:
             self._issues = [{"message": str(e), "blocking": True}]
         self.issuesChanged.emit()
+
+    def _plan(self, speed=None):
+        return make_plan(self._prepared_score(), self._profile, self._transpose, self._skip,
+                         speed=self._speed if speed is None else speed,
+                         long_note_policy=self._long_policy, repeat_gap_ms=self._repeat_gap)
+
+    @Slot(str, str)
+    def beginBinding(self, target, label):
+        if not self._busy: self.binding.begin(target,label)
+
+    def _begin_binding(self):
+        self.stop(); self.stopAudio(); self.hotkeys.close()
+
+    def _restore_hotkeys(self):
+        if self.mode == "player" and not self._no_hotkeys and not self._closing and not self.hotkeys.ready:
+            self.hotkeys.start(self._profile.hotkeys)
+
+    @Slot(str, str)
+    def _capture_binding(self, target, key):
+        try:
+            draft = self._profile.to_dict()
+            category, item = target.split(":")
+            if category == "note": draft["keys"][int(item)] = key
+            elif category == "modifier": draft["modifiers"][int(item)]["key"] = key
+            elif category == "hotkey" and item in draft["hotkeys"]: draft["hotkeys"][item] = key
+            else: raise ValueError("绑定项目无效")
+            new_profile = Profile.from_dict(draft)
+            self._apply_profile(new_profile)
+            self._message = f"{self.binding.label} 已绑定为 {key}，已保存"
+            self.binding.accept()
+        except Exception as e:
+            # Keep listening after a conflict; don't let restored global hotkeys
+            # steal the next key from the capture dialog.
+            self.hotkeys.close()
+            self.binding.reject(str(e))
+            self._message = str(e)
+        self.changed.emit()
 
     @Slot(str, object)
     def _handle_report(self, kind, value):
@@ -241,6 +295,7 @@ class Backend(QObject):
 
     @Slot(str)
     def _on_hotkey(self, action):
+        if self.binding.active: return
         if self._calibration_visible:
             self.calibrationAction(action)
             return
@@ -330,13 +385,27 @@ class Backend(QObject):
         self._melody, self._skip, self._target = melody, skip, target
         self._auto_continue=auto_continue
         try:
-            atomic_json(self.data_dir/"preferences.json",{"speed":round(speed*100),"delay":delay,"transpose":transpose,"melody":melody,"skip":skip,"auto_continue":auto_continue})
+            self._save_preferences()
         except OSError as e: self._message=f"无法保存演奏偏好：{e}"
         self._check()
         self.changed.emit()
 
+    def _save_preferences(self):
+        atomic_json(self.data_dir/"preferences.json",{"speed":round(self._speed*100),"delay":self._delay,
+                    "transpose":self._transpose,"melody":self._melody,"skip":self._skip,
+                    "auto_continue":self._auto_continue,"long_policy":self._long_policy,"repeat_gap":self._repeat_gap})
+
+    @Slot(str, float)
+    def configureArticulation(self, policy, gap):
+        if policy not in {"hold","rearticulate"} or not 0 <= gap <= 150: return
+        self._long_policy,self._repeat_gap=policy,gap
+        try: self._save_preferences()
+        except OSError as e: self._error(e)
+        self._check();self.audition.reset_score(self._score.duration_ms);self.changed.emit()
+
     @Slot()
     def toggle(self):
+        if self.binding.active: return
         if self.calibrationActive:
             self._error("请先完成或取消调音引导，再启动演奏")
             return
@@ -344,13 +413,12 @@ class Backend(QObject):
             self.stop()
             return
         try:
-            if not self._preview and not self._profile.calibrated:
-                raise ValueError("请在调音页核对实际音高并确认校准，再启用游戏输入")
             if not self._preview and not self.hotkeys.ready:
                 raise ValueError("全局热键尚未就绪，请先解决底部显示的热键冲突")
             if not self._preview and not 0 <= self._target < len(self._windows):
                 raise ValueError("请选择目标游戏窗口")
-            plan = make_plan(self._prepared_score(), self._profile, self._transpose, self._skip)
+            self.stopAudio()
+            plan = self._plan()
             self._issues = plan.issues
             self.issuesChanged.emit()
             self._progress = 0
@@ -380,15 +448,34 @@ class Backend(QObject):
         try:
             self.stop()
             new_profile = Profile.from_dict(json.loads(raw))
-            new_profile.save(self.data_dir / "profile.json")
-            self._profile = new_profile
-            self.profileChanged.emit()
-            if self.mode == "player" and not self._no_hotkeys:
-                self.hotkeys.start(self._profile.hotkeys)
-            self._check()
-            self._message = "场景已保存，调音与自定义键位已应用"
+            self._apply_profile(new_profile)
+            self._message = "场景和按键已保存"
         except Exception as e: self._message = str(e)
         self.changed.emit()
+
+    def _apply_profile(self, new_profile):
+        previous = self._profile
+        register = self.mode == "player" and not self._no_hotkeys
+        try:
+            if register:
+                if hasattr(self.hotkeys,"try_start"):
+                    if not self.hotkeys.try_start(new_profile.hotkeys):
+                        raise ValueError(self.hotkeys.error or "热键注册失败，已保留原配置")
+                else: self.hotkeys.start(new_profile.hotkeys)
+            new_profile.save(self.data_dir / "profile.json")
+        except Exception:
+            if register: self.hotkeys.start(previous.hotkeys)
+            raise
+        self._profile = new_profile
+        self.audition.reset_score(self._score.duration_ms)
+        self.profileChanged.emit();self._check()
+
+    @Slot()
+    def useBuiltinProfile(self):
+        # Reset only the sound mapping; the user's keyboard and hotkeys survive.
+        profile=Profile(keys=list(self._profile.keys),hotkeys=dict(self._profile.hotkeys))
+        for mod, old in zip(profile.modifiers,self._profile.modifiers): mod.key=old.key
+        self.saveProfile(json.dumps(profile.to_dict()))
 
     @Slot()
     def exportProfile(self):
@@ -894,6 +981,7 @@ class Backend(QObject):
     @Slot(bool)
     def auditionOriginal(self, loop):
         if self._media is None: return
+        self.engine.stop();self.audition.stop()
         source = self._score.source_file or self._audio_path
         if not Path(source).is_file():
             self._error("找不到原音频；请先重新选择原文件")
@@ -914,32 +1002,37 @@ class Backend(QObject):
 
     @Slot()
     def auditionScore(self):
-        if self._media is None or self._busy or not self._score.notes: return
-        self.stopAudio(); self._busy=True; self._conversion_cancel.clear()
-        score=replace(self._score, notes=list(self._score.notes))
-        if 0<=self._selected_note<len(score.notes):
-            n=score.notes[self._selected_note]
-            score=replace(score,notes=[replace(n,start_ms=0)],duration_ms=n.duration_ms)
-        path=self.data_dir / ("audition_"+uuid.uuid4().hex[:8]+".wav")
-        def worker():
-            try:
-                from .converter.audio import synthesize
-                synthesize(score,path,self._conversion_cancel)
-                self.report.emit("synthesized",path)
-            except Exception as e: self.report.emit("error",str(e))
-            finally: self.report.emit("job_done",None)
-        self._conversion_thread=threading.Thread(target=worker,daemon=True)
-        self._conversion_thread.start()
-        self.changed.emit()
+        if self._busy or self.binding.active: return
+        self.engine.stop()
+        if self._media: self._media.stop()
+        try:
+            score=self._score
+            if self.audition.mode == "game":
+                plan=self._plan(speed=self.audition.speed)
+                if not plan.playable: raise ValueError("游戏效果试听需要先处理音域或重叠音问题")
+                score=replace(score,notes=plan.notes,reference_hz=self._profile.reference_hz)
+            self.audition.play(score)
+        except Exception as e: self._error(e)
+
+    @Slot()
+    def auditionSelected(self):
+        if 0 <= self._selected_note < len(self._score.notes):
+            note=self._score.notes[self._selected_note]
+            self.audition.setLoop(True,note.start_ms,note.end_ms)
+            self.audition.seek(note.start_ms)
+        self.auditionScore()
 
     @Slot()
     def stopAudio(self):
+        self.audition.stop()
         self._loop_end=0
         self._pending_seek=None
         if self._media: self._media.stop()
 
     def close(self):
         self._closing = True
+        self.binding.close()
+        self.audition.close()
         self.cancelCalibration()
         self._calibration_timer.stop()
         self._overlay_hide_timer.stop()

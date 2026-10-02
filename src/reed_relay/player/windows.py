@@ -150,15 +150,28 @@ class Hotkeys:
         self.stop_event = threading.Event()
         self.thread = None
         self.ready = False
+        self.started_event = threading.Event()
+        self.error = ""
 
     def start(self, bindings):
         self.close()
+        self.started_event.clear()
+        self.error = ""
         if os.name != "nt":
             self.report("此系统只能使用界面按钮；全局热键需要 Windows")
             return
         self.stop_event.clear()
         self.thread = threading.Thread(target=self._listen, args=(dict(bindings),), daemon=True)
         self.thread.start()
+
+    def try_start(self, bindings):
+        """Register on the owning thread before committing a changed binding."""
+        self.start(bindings)
+        self.started_event.wait(timeout=1)
+        if not self.ready:
+            self.close()
+            return False
+        return True
 
     def _listen(self, bindings):
         api, registered, actions = user32(), [], {}
@@ -173,14 +186,17 @@ class Hotkeys:
                 registered.append(i)
                 actions[i] = action
             self.ready = True
+            self.started_event.set()
             self.report("全局热键已注册")
             msg = w.MSG()
             while not self.stop_event.wait(.01):
                 while api.PeekMessageW(c.byref(msg), None, 0x312, 0x312, 1):
                     self.callback(actions.get(msg.wParam, ""))
         except Exception as e:
+            self.error = str(e)
             self.report(str(e))
         finally:
+            self.started_event.set()
             self.ready = False
             for i in registered:
                 api.UnregisterHotKey(None, i)

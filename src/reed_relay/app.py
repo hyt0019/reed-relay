@@ -16,7 +16,7 @@ from .backend import Backend
 def run(mode):
     parser = argparse.ArgumentParser()
     parser.add_argument("--screenshot")
-    parser.add_argument("--overlay-demo", action="store_true", help="仅显示调音悬浮窗示例，不采集或保存")
+    parser.add_argument("--binding-demo", action="store_true", help="显示按键捕获弹层供界面检查")
     parser.add_argument("--page", default="main")
     parser.add_argument("--demo", action="store_true")
     parser.add_argument("--no-hotkeys", action="store_true")
@@ -24,7 +24,17 @@ def run(mode):
     parser.add_argument("--transcribe")
     parser.add_argument("--check-loopback", action="store_true", help="播放短参考音并验证电脑声音采集，需 --output")
     parser.add_argument("--output")
+    parser.add_argument("--render-audition", help="从曲谱渲染口琴 WAV，不启动界面")
+    parser.add_argument("--audition-mode", choices=["clean","game"], default="clean")
+    parser.add_argument("--audition-speed", type=float, default=1.)
     args = parser.parse_args()
+    if args.render_audition:
+        if not args.output: parser.error("--render-audition 需要 --output")
+        from .core.score import Score
+        from .core.harmonica import synthesize_harmonica
+        score=Score.load(args.render_audition)
+        synthesize_harmonica(score,args.output,speed=args.audition_speed,mode=args.audition_mode)
+        return 0
     if args.check_loopback:
         if not args.output: parser.error("--check-loopback 需要 --output 诊断路径")
         from .core.score import atomic_json
@@ -59,7 +69,6 @@ def run(mode):
         if families: font_family = families[0]
     app.setFont(QFont(font_family, 10))
     backend = Backend(mode, no_hotkeys=args.no_hotkeys or bool(args.screenshot))
-    if args.page == "settings": backend.refreshAudioDevices()
     if args.demo: backend.loadDemo()
     if args.score: backend.loadProjectPath(args.score)
     engine = QQmlApplicationEngine()
@@ -70,28 +79,17 @@ def run(mode):
     if not engine.rootObjects():
         backend.close()
         return 1
-    engine.load(QUrl.fromLocalFile(str(Path(__file__).parent / "ui" / "CalibrationOverlay.qml")))
-    if len(engine.rootObjects())<2:
-        backend.close()
-        return 1
-    overlay = engine.rootObjects()[1]
-    from .overlay import position_overlay
-    placement = [None]
-    def place_overlay():
-        value = backend.calibration
-        new = (value["visible"],value["monitor"],value["position"])
-        if new != placement[0] and value["visible"]:
-            position_overlay(overlay,value["monitor"],value["position"])
-        placement[0] = new
-    backend.calibrationChanged.connect(place_overlay)
-    if args.overlay_demo: backend.previewCalibration()
+    if args.binding_demo:
+        QTimer.singleShot(250,lambda:backend.beginBinding("note:0","音符 1"))
     app.aboutToQuit.connect(backend.close)
     if args.screenshot:
         def capture():
             destination = Path(args.screenshot)
             destination.parent.mkdir(parents=True, exist_ok=True)
             try:
-                ok = (overlay if args.overlay_demo else engine.rootObjects()[0]).grabWindow().save(str(destination))
+                if not engine.rootObjects()[0].property("pagesReady"):
+                    app.exit(3); return
+                ok = engine.rootObjects()[0].grabWindow().save(str(destination))
                 app.exit(0 if ok else 2)
             except Exception:
                 app.exit(2)

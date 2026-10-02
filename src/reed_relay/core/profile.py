@@ -159,6 +159,7 @@ class Plan:
 
 def make_plan(score: Score, profile: Profile, transpose=0, skip_unmapped=False, *,
               speed=1., long_note_policy="hold", repeat_gap_ms=35., long_note_ms=2600.) -> Plan:
+    score = replace(score, notes=list(score.notes))
     score.validate()
     number(transpose, "演奏移调", -48, 48)
     if type(transpose) is not int:
@@ -193,7 +194,8 @@ def make_plan(score: Score, profile: Profile, transpose=0, skip_unmapped=False, 
         count = math.ceil(real_duration/long_note_ms) if long_note_policy == "rearticulate" and real_duration > 2900 else 1
         segment = n.duration_ms/count
         for i in range(count):
-            rendered.append(replace(n, start_ms=n.start_ms+i*segment, duration_ms=segment))
+            rendered.append(replace(n, start_ms=n.start_ms+i*segment, duration_ms=segment,
+                                    id=f"{n.id}:segment:{i}" if count > 1 else n.id))
     # Keep the next onset on the original beat; make room before it only when
     # retriggering the same pitch. Switching notes never accumulates a breath gap.
     for i, n in enumerate(rendered):
@@ -201,7 +203,7 @@ def make_plan(score: Score, profile: Profile, transpose=0, skip_unmapped=False, 
             nxt = rendered[i+1]
             available = nxt.start_ms-n.end_ms
             if n.midi_pitch == nxt.midi_pitch and 0 <= available < repeat_gap_ms*speed:
-                duration = max(n.duration_ms*.5, nxt.start_ms-repeat_gap_ms*speed-n.start_ms)
+                duration = max(.1, n.duration_ms*.5, nxt.start_ms-repeat_gap_ms*speed-n.start_ms)
                 rendered[i] = n = replace(n, duration_ms=duration)
         key, mods = mapping[n.midi_pitch]
         events.extend([Event(n.start_ms, True, key, n.id, n.midi_pitch, 3), Event(n.end_ms, False, key, n.id, n.midi_pitch, 0)])

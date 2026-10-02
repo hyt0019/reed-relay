@@ -68,14 +68,14 @@ def synthesize_harmonica(score, path, cancel=None, speed=1., mode="clean", progr
     Audio is written in blocks to a temporary file then atomically replaced.
     The score is never edited, and long files use bounded audio memory.
     """
-    score.validate()
+    score = replace(score, notes=list(score.notes)).validate()
     if not .25 <= speed <= 2 or mode not in {"clean", "game"}:
         raise ValueError("试听速度或音色模式无效")
     cancel = cancel or threading.Event()
     path = Path(path)
     temporary = path.with_name(path.name+".part")
     rate, chunk = 44100, 4096
-    notes = sorted((replace(n, start_ms=n.start_ms/speed, duration_ms=n.duration_ms/speed) for n in score.notes), key=lambda n:n.start_ms)
+    notes = sorted(score.notes, key=lambda n:n.start_ms)
     length = round(score.duration_ms/1000/speed*rate)
     active, index = [], 0
     try:
@@ -85,13 +85,13 @@ def synthesize_harmonica(score, path, cancel=None, speed=1., mode="clean", progr
                 if cancel.is_set():
                     raise RenderCancelled("试听生成已取消")
                 stop = min(length, start+chunk)
-                while index < len(notes) and notes[index].start_ms/1000 < stop/rate:
+                while index < len(notes) and notes[index].start_ms/1000/speed < stop/rate:
                     active.append(notes[index]); index += 1
-                active = [n for n in active if n.end_ms/1000 > start/rate]
+                active = [n for n in active if n.end_ms/1000/speed > start/rate]
                 t = np.arange(start, stop)/rate
                 block = np.zeros(stop-start)
                 for n in active:
-                    block += note_audio(n.midi_pitch, t-n.start_ms/1000, n.duration_ms/1000,
+                    block += note_audio(n.midi_pitch, t-n.start_ms/1000/speed, n.duration_ms/1000/speed,
                                         score.reference_hz, n.velocity, mode, rate, n.cents)
                 # Smooth output limiting handles dense polyphonic score candidates.
                 writer.writeframes((np.tanh(block)*32767).astype("<i2").tobytes())

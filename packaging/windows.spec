@@ -5,11 +5,11 @@ from PyInstaller.utils.hooks import collect_data_files, copy_metadata
 root = Path(SPECPATH).parent
 target = os.environ.get('REED_BUILD_TARGET', 'player')
 name = 'ReedRelay-' + target.title()
-datas = [(str(root/'src/reed_relay/ui'), 'reed_relay/ui'), (str(root/'docs/THIRD_PARTY.md'), '.')]
+datas = [(str(root/'src/reed_relay/ui'), 'reed_relay/ui'), (str(root/'src/reed_relay/assets'), 'reed_relay/assets'), (str(root/'docs/THIRD_PARTY.md'), '.')]
 hidden = ['pyaudiowpatch']
 excluded = ['tensorflow', 'torch', 'matplotlib', 'IPython', 'notebook', 'pytest', 'tkinter']
 if target == 'player':
-    excluded += ['reed_relay.converter', 'basic_pitch', 'librosa', 'scipy', 'sklearn', 'numba', 'llvmlite', 'onnxruntime', 'soundfile', 'imageio_ffmpeg', 'PySide6.QtMultimedia']
+    excluded += ['reed_relay.converter', 'basic_pitch', 'librosa', 'scipy', 'sklearn', 'numba', 'llvmlite', 'onnxruntime', 'soundfile', 'imageio_ffmpeg']
 else:
     for module in ['basic_pitch', 'resampy', 'librosa', 'imageio_ffmpeg']:
         datas += collect_data_files(module)
