@@ -23,6 +23,7 @@ ApplicationWindow {
     function profileDraft() { return settingsLoader.item ? settingsLoader.item.profileDraft() : bridge.profile }
     function noteName(n) { return ["C","C♯","D","D♯","E","F","F♯","G","G♯","A","A♯","B"][((n%12)+12)%12] + (Math.floor(n/12)-1) }
     function clock(ms) { let s=Math.floor(ms/1000); return Math.floor(s/60).toString().padStart(2,"0")+":"+(s%60).toString().padStart(2,"0") }
+    function preciseClock(ms) { return clock(ms)+"."+Math.floor((ms%1000)/100) }
     Popup {
         id: bindingDialog
         objectName: "bindingDialog"
@@ -91,7 +92,7 @@ ApplicationWindow {
                 ActionButton { text: "按键"; primary: root.page === "settings"; implicitWidth: 63; implicitHeight: 57; onClicked: { root.reloadDraft(); root.page="settings" } }
                 ActionButton { text: "存储"; primary: root.page === "storage"; implicitWidth: 63; implicitHeight: 57; onClicked: root.page="storage" }
             }
-            Label { anchors.bottom: parent.bottom; anchors.bottomMargin: 26; anchors.horizontalCenter: parent.horizontalCenter; text: "0.3.0"; color: "#78918e"; font.pixelSize: 12 }
+            Label { anchors.bottom: parent.bottom; anchors.bottomMargin: 26; anchors.horizontalCenter: parent.horizontalCenter; text: "0.3.1"; color: "#78918e"; font.pixelSize: 12 }
         }
         StackLayout {
             Layout.fillWidth:true;Layout.fillHeight:true
@@ -124,7 +125,7 @@ ApplicationWindow {
                     ColumnLayout {
                         Layout.fillWidth: true; spacing: 19
                         Rectangle {
-                            Layout.fillWidth: true; Layout.preferredHeight: 183; radius: 16; color: "#173c48"
+                            Layout.fillWidth: true; Layout.preferredHeight: 216; radius: 16; color: "#173c48"
                             ColumnLayout {
                                 anchors.fill: parent; anchors.margins: 23; spacing: 8
                                 RowLayout {
@@ -134,19 +135,62 @@ ApplicationWindow {
                                 }
                                 Label { Layout.fillWidth: true; text: bridge.title; color: "#fbfdf7"; font.pixelSize: 28; font.bold: true; elide: Text.ElideRight }
                                 Item { Layout.fillHeight: true }
-                                ProgressBar { Layout.fillWidth: true; from: 0; to: Math.max(1,bridge.duration); value: bridge.progress; palette.highlight: "#d98b60" }
-                                RowLayout {
-                                    Label { text: root.clock(bridge.progress); color: "#c3d6d5"; font.pixelSize: 12 }
-                                    Item { Layout.fillWidth: true }
-                                    Label { text: root.clock(bridge.duration); color: "#c3d6d5"; font.pixelSize: 12 }
+                                Slider {
+                                    id: performanceSeek
+                                    objectName: "playerSeek"
+                                    Layout.fillWidth: true; implicitHeight: 34
+                                    from: 0; to: Math.max(1,bridge.duration); stepSize: 100
+                                    enabled: bridge.duration>0 && !root.binding.active && !bridge.calibrationActive
+                                    property real chosenPosition: 0
+                                    Binding { target:performanceSeek;property:"value";value:bridge.progress;when:!performanceSeek.pressed;restoreMode:Binding.RestoreNone }
+                                    onPressedChanged: {
+                                        if (pressed) { chosenPosition=value;bridge.beginPlayerSeek() }
+                                        else bridge.seekPlayer(chosenPosition)
+                                    }
+                                    onMoved: {
+                                        chosenPosition=value
+                                        if (!pressed) bridge.seekPlayer(value)
+                                    }
+                                    onVisibleChanged: if (!visible && bridge.playerSeeking) bridge.seekPlayer(chosenPosition)
+                                    Connections {
+                                        target: root
+                                        function onActiveChanged() { if (!root.active && performanceSeek.pressed) bridge.seekPlayer(performanceSeek.chosenPosition) }
+                                    }
+                                    background: Rectangle {
+                                        x:performanceSeek.leftPadding;y:performanceSeek.topPadding+performanceSeek.availableHeight/2-height/2
+                                        width:performanceSeek.availableWidth;height:6;radius:3;color:"#66808a"
+                                        Rectangle { width:performanceSeek.visualPosition*parent.width;height:parent.height;radius:3;color:"#e9bf97" }
+                                    }
+                                    handle: Rectangle {
+                                        x:performanceSeek.leftPadding+performanceSeek.visualPosition*(performanceSeek.availableWidth-width)
+                                        y:performanceSeek.topPadding+performanceSeek.availableHeight/2-height/2
+                                        width:22;height:22;radius:11;color:performanceSeek.pressed?"#e9bf97":"#fbfdf7"
+                                        border.color:performanceSeek.activeFocus?"#e9bf97":"#c1d7d5";border.width:performanceSeek.activeFocus?3:1
+                                    }
+                                    Accessible.name: "演奏进度，拖动选择起点"
+                                    ToolTip.visible: pressed
+                                    ToolTip.text: root.preciseClock(chosenPosition)
                                 }
+                                RowLayout {
+                                    Label { objectName:"playerPosition";text:root.preciseClock(performanceSeek.pressed?performanceSeek.chosenPosition:bridge.progress);color:"#fbfdf7";font.pixelSize:14;font.bold:true }
+                                    Label { text:"/ "+root.clock(bridge.duration);color:"#c3d6d5";font.pixelSize:12 }
+                                    Item { Layout.fillWidth: true }
+                                    ToolButton {
+                                        objectName:"playerReset";text:"回到开头";implicitHeight:28;implicitWidth:94
+                                        enabled:bridge.duration>0 && !bridge.playerSeeking && !root.binding.active
+                                        onClicked:bridge.seekPlayer(0)
+                                        contentItem:Text { text:parent.text;color:parent.enabled?"#c3d6d5":"#66808a";font.pixelSize:12;horizontalAlignment:Text.AlignHCenter;verticalAlignment:Text.AlignVCenter }
+                                        background:Rectangle { radius:6;color:parent.hovered?"#244d59":"transparent";border.color:parent.activeFocus?"#e9bf97":"transparent" }
+                                    }
+                                }
+                                Label { Layout.fillWidth:true;text:performanceSeek.pressed?"松开选择起点，再按启停热键开始":"拖动选择演奏起点 · 停止后保留当前位置";color:"#c1d7d5";font.pixelSize:12 }
                             }
                         }
                         RowLayout {
                             Layout.fillWidth: true
-                            ActionButton { text: "上一首"; onClicked: bridge.stepSong(-1) }
-                            ActionButton { Layout.fillWidth: true; text: bridge.running ? "停止演奏" : "开始演奏  " + bridge.profile.hotkeys.toggle; primary: true; implicitHeight: 46; onClicked: { playScroll.applyOptions(); bridge.toggle() } }
-                            ActionButton { text: "下一首"; onClicked: bridge.stepSong(1) }
+                            ActionButton { text: "上一首";enabled:!bridge.playerSeeking;onClicked: bridge.stepSong(-1) }
+                            ActionButton { objectName:"playerToggle";Layout.fillWidth:true;enabled:!bridge.playerSeeking;text:bridge.running?"停止演奏":(bridge.progress>=bridge.duration&&bridge.duration>0?"重新演奏":bridge.progress>0?"从此处演奏":"开始演奏")+"  "+bridge.profile.hotkeys.toggle;primary:true;implicitHeight:46;onClicked:{playScroll.applyOptions();bridge.toggle()} }
+                            ActionButton { text: "下一首";enabled:!bridge.playerSeeking;onClicked: bridge.stepSong(1) }
                         }
                         Label { text: "游戏按键"; color: "#17343b"; font.pixelSize: 17; font.bold: true }
                         RowLayout {

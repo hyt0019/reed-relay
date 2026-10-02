@@ -14,7 +14,7 @@ import wave
 import numpy as np
 from PySide6.QtCore import QObject, Property, Signal, Slot, QTimer, QUrl
 from PySide6.QtWidgets import QFileDialog
-from reed_relay.core.score import Score, Note, atomic_json, pitch_name, extract_melody
+from reed_relay.core.score import Score, Note, atomic_json, pitch_name, extract_melody, number
 from reed_relay.core.profile import Profile, make_plan
 from reed_relay.core.tuning import tone, detect_frequency, describe_frequency
 from reed_relay.core.calibration import GuidedCalibration
@@ -52,6 +52,7 @@ class Backend(QObject):
         self._selected = -1
         self._message, self._state, self._hotkey_status = self.storage.notice or "添加曲谱后即可预演", "待机", ""
         self._progress, self._active_pitch, self._active_key = 0., -1, ""
+        self._player_session, self._player_seeking = 0, False
         self._preview, self._speed, self._delay, self._transpose = True, 1., 3., 0
         self._melody, self._skip, self._target = False, False, -1
         self._auto_continue = False
@@ -98,7 +99,7 @@ class Backend(QObject):
         self._overlay_hide_timer = QTimer(self)
         self._overlay_hide_timer.setSingleShot(True)
         self._overlay_hide_timer.timeout.connect(self.hideCalibration)
-        self.engine = PlayerEngine(lambda kind, value: self.report.emit(kind, value))
+        self.engine = PlayerEngine()
         self.audition = Audition(self.data_dir, self)
         self.audition.message.connect(self._error)
         self.scoreChanged.connect(lambda: self.audition.reset_score(self._score.duration_ms))
@@ -189,6 +190,8 @@ class Backend(QObject):
     def duration(self): return self._score.duration_ms
     @Property(float, notify=changed)
     def progress(self): return self._progress
+    @Property(bool, notify=changed)
+    def playerSeeking(self): return self._player_seeking
     @Property(bool, notify=changed)
     def running(self): return self._state in ("演奏中", "倒计时")
     @Property("QVariantMap", notify=changed)
@@ -365,6 +368,9 @@ class Backend(QObject):
 
     @Slot(str, object)
     def _handle_report(self, kind, value):
+        if kind == "player":
+            session, kind, value = value
+            if self._closing or session != self._player_session: return
         if kind == "state": self._state = value
         elif kind == "progress": self._progress = value
         elif kind == "note":
@@ -382,6 +388,7 @@ class Backend(QObject):
                 self._audio_path = info.get("path", self._audio_path)
         elif kind == "converted":
             self._score, path = value
+            self._progress = 0.
             self._selected_note, self._undo, self._redo = -1, [], []
             self.selectionChanged.emit()
             self._audio_path = self._score.source_file
@@ -571,6 +578,7 @@ class Backend(QObject):
 
     @Slot(int)
     def stepSong(self, delta):
+        if self._player_seeking: return
         if self._playlist:
             resume=self.engine.running and self._auto_continue
             loaded=self.selectSong((self._selected + delta) % len(self._playlist))
@@ -591,6 +599,7 @@ class Backend(QObject):
             self._playlist.pop(index)
             self._selected = -1
             self._score = Score("还没有添加曲谱")
+            self._progress = 0.
             if self._playlist: self.selectSong(min(index, len(self._playlist)-1))
             self._save_playlist()
             self._check()
@@ -632,12 +641,18 @@ class Backend(QObject):
     @Slot()
     def toggle(self):
         if self.binding.active: return
+        if self._player_seeking:
+            self._error("请先松开进度条，再开始演奏")
+            return
         if self.calibrationActive:
             self._error("请先完成或取消调音引导，再启动演奏")
             return
         if self.engine.running:
             self.stop()
             return
+        if self.running:
+            # The worker may have finished before Qt drains its final reports.
+            self.stop()
         try:
             if not self._preview and not self.hotkeys.ready:
                 raise ValueError("全局热键尚未就绪，请先解决底部显示的热键冲突")
@@ -647,17 +662,61 @@ class Backend(QObject):
             plan = self._plan()
             self._issues = plan.issues
             self.issuesChanged.emit()
-            self._progress = 0
+            start_ms = self._progress if self._progress < plan.duration_ms else 0.
+            self._player_session += 1
+            session = self._player_session
             self.engine.start(plan, PreviewOutput() if self._preview else WindowsOutput(), self._speed,
                               0 if self._preview else self._delay,
-                              (lambda: True) if self._preview else focus_guard(self._windows[self._target]))
+                              (lambda: True) if self._preview else focus_guard(self._windows[self._target]),
+                              start_ms=start_ms,
+                              report=lambda kind, value: self.report.emit("player", (session, kind, value)))
+            self._progress = start_ms
+            self._state = "演奏中" if self._preview or not self._delay else "倒计时"
             self._message = "预演中：未发送按键" if self._preview else "准备向选定游戏窗口发送按键"
         except Exception as e: self._message = str(e)
         self.changed.emit()
 
     @Slot()
     def stop(self):
+        was_running = self.engine.running or self.running
+        # Invalidate queued worker signals before joining: they must not move a
+        # newly selected cursor, clear a new run, or light keys from an old song.
+        self._player_session += 1
         self.engine.stop()
+        self._player_seeking = False
+        if self.engine.running:
+            self._message = "演奏正在停止，请稍后重试"
+        else:
+            if was_running:
+                self._progress = min(self._score.duration_ms, self.engine.position_ms)
+                self._message = self.engine.result or "已停止"
+            self._state, self._active_pitch, self._active_key = "待机", -1, ""
+        self.changed.emit()
+
+    @Slot()
+    def beginPlayerSeek(self):
+        if self.binding.active or self.calibrationActive or not self._score.duration_ms: return
+        self.stop()
+        if self.engine.running: return
+        self.stopAudio()
+        self._player_seeking = True
+        self.changed.emit()
+
+    @Slot(float)
+    def seekPlayer(self, position):
+        try:
+            number(position, "演奏位置", 0, self._score.duration_ms)
+            if self.binding.active or self.calibrationActive: return
+            self.stop()
+            if self.engine.running: return
+            self.stopAudio()
+            self._progress = float(position)
+            seconds = position / 1000
+            self._message = f"已定位 {int(seconds//60):02d}:{seconds%60:04.1f}；按启停热键或点击演奏，从此处开始"
+            self.changed.emit()
+        except ValueError as error:
+            self._player_seeking = False
+            self._error(error)
 
     @Slot()
     def refreshWindows(self):
@@ -1049,7 +1108,9 @@ class Backend(QObject):
         try:
             self.stopAudio()
             score = Score.from_midi(path) if path.lower().endswith((".mid", ".midi")) else Score.load(path)
+            self.stop()
             self._score = score
+            self._progress = 0.
             self._audio_path = score.source_file if Path(score.source_file).suffix.lower() in {'.mp3','.wav','.flac','.ogg','.m4a'} else ''
             self._undo, self._redo, self._selected_note = [], [], -1
             self.selectionChanged.emit()
@@ -1204,7 +1265,9 @@ class Backend(QObject):
             except Exception as e: self._error(e)
 
     def _media_position(self, position):
-        self._progress=position
+        # Original-audio transport belongs to the converter, never to the
+        # player's selected performance cursor (including stop's zero report).
+        if self.mode == "converter": self._progress=position
         if self._loop_end and position>=self._loop_end:
             if self._loop_enabled: self._media.setPosition(self._loop_start)
             else: self._media.pause()
@@ -1220,7 +1283,7 @@ class Backend(QObject):
     @Slot(bool)
     def auditionOriginal(self, loop):
         if self._media is None: return
-        self.engine.stop();self.audition.stop()
+        self.stop();self.audition.stop()
         source = self._score.source_file or self._audio_path
         if not Path(source).is_file():
             self._error("找不到原音频；请先重新选择原文件")
@@ -1242,7 +1305,7 @@ class Backend(QObject):
     @Slot()
     def auditionScore(self):
         if self._busy or self.binding.active: return
-        self.engine.stop()
+        self.stop()
         if self._media: self._media.stop()
         try:
             score=self._score
@@ -1281,7 +1344,7 @@ class Backend(QObject):
         self.stopAudio()
         if self._conversion_thread and self._conversion_thread.is_alive():
             self._conversion_thread.join(timeout=2)
-        self.engine.stop()
+        self.stop()
         self.hotkeys.close()
         self.stopTuning()
         try:
