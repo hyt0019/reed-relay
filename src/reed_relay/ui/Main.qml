@@ -89,7 +89,7 @@ ApplicationWindow {
                 ActionButton { text: "试听"; primary: root.page === "audition"; implicitWidth: 63; implicitHeight: 57; onClicked: root.page="audition" }
                 ActionButton { text: "按键"; primary: root.page === "settings"; implicitWidth: 63; implicitHeight: 57; onClicked: { root.reloadDraft(); root.page="settings" } }
             }
-            Label { anchors.bottom: parent.bottom; anchors.bottomMargin: 26; anchors.horizontalCenter: parent.horizontalCenter; text: "0.1.0"; color: "#78918e"; font.pixelSize: 12 }
+            Label { anchors.bottom: parent.bottom; anchors.bottomMargin: 26; anchors.horizontalCenter: parent.horizontalCenter; text: "0.2.0"; color: "#78918e"; font.pixelSize: 12 }
         }
         StackLayout {
             Layout.fillWidth:true;Layout.fillHeight:true

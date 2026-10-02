@@ -22,16 +22,23 @@ try {
     $env:REED_RELAY_DATA_DIR=Join-Path $taskRoot 'local-data\smoke'
     $env:PYTHONPATH=''
     Invoke-SmokeApp '.\dist\ReedRelay-Player\ReedRelay-Player.exe' @('--demo','--screenshot','output/smoke/player.png')
-    Invoke-SmokeApp '.\dist\ReedRelay-Player\ReedRelay-Player.exe' @('--page','settings','--screenshot','output/smoke/tuning.png')
-    Invoke-SmokeApp '.\dist\ReedRelay-Player\ReedRelay-Player.exe' @('--overlay-demo','--screenshot','output/smoke/calibration-overlay.png')
+    Invoke-SmokeApp '.\dist\ReedRelay-Player\ReedRelay-Player.exe' @('--page','settings','--screenshot','output/smoke/settings.png')
+    Invoke-SmokeApp '.\dist\ReedRelay-Player\ReedRelay-Player.exe' @('--demo','--page','audition','--screenshot','output/smoke/audition.png')
+    Invoke-SmokeApp '.\dist\ReedRelay-Player\ReedRelay-Player.exe' @('--page','settings','--binding-demo','--screenshot','output/smoke/binding.png')
     Invoke-SmokeApp '.\dist\ReedRelay-Converter\ReedRelay-Converter.exe' @('--transcribe','output/smoke/calibration.wav','--output','output/smoke/score.json')
     $score = Get-Content 'output\smoke\score.json' -Raw -Encoding UTF8 | ConvertFrom-Json
     if ($score.notes.Count -lt 8 -or $score.duration_ms -lt 6000) { throw 'Incomplete transcription in frozen converter.' }
     Invoke-SmokeApp '.\dist\ReedRelay-Converter\ReedRelay-Converter.exe' @('--score','output/smoke/score.json','--screenshot','output/smoke/converter.png')
-    Invoke-SmokeApp '.\dist\ReedRelay-Converter\ReedRelay-Converter.exe' @('--overlay-demo','--screenshot','output/smoke/converter-overlay.png')
-    foreach ($path in @('player.png','tuning.png','converter.png','calibration-overlay.png','converter-overlay.png')) {
+    Invoke-SmokeApp '.\dist\ReedRelay-Converter\ReedRelay-Converter.exe' @('--score','output/smoke/score.json','--page','audition','--screenshot','output/smoke/converter-audition.png')
+    Invoke-SmokeApp '.\dist\ReedRelay-Player\ReedRelay-Player.exe' @('--demo','--page','audition','--audition-demo','--screenshot','output/smoke/player-transport.png')
+    Invoke-SmokeApp '.\dist\ReedRelay-Converter\ReedRelay-Converter.exe' @('--demo','--page','audition','--audition-demo','--screenshot','output/smoke/converter-transport.png')
+    Invoke-SmokeApp '.\dist\ReedRelay-Player\ReedRelay-Player.exe' @('--render-audition','output/smoke/score.json','--output','output/smoke/player-harmonica.wav','--audition-speed','1.25')
+    Invoke-SmokeApp '.\dist\ReedRelay-Converter\ReedRelay-Converter.exe' @('--render-audition','output/smoke/score.json','--output','output/smoke/converter-harmonica.wav','--audition-mode','game')
+    foreach ($path in @('player.png','settings.png','audition.png','binding.png','converter.png','converter-audition.png','player-transport.png','converter-transport.png')) {
         if ((Get-Item (Join-Path 'output\smoke' $path)).Length -lt 10000) { throw "Invalid screenshot: $path" }
     }
+    & '.\.venv\Scripts\python.exe' -c "import wave,numpy as np; from pathlib import Path; files=[Path('output/smoke/player-harmonica.wav'),Path('output/smoke/converter-harmonica.wav')]; [None for p in files if p.stat().st_size>10000]; readers=[wave.open(str(p)) for p in files]; lengths=[r.getnframes()/r.getframerate() for r in readers]; samples=[np.frombuffer(r.readframes(r.getnframes()),dtype='<i2') for r in readers]; assert abs(lengths[0]*1.25-lengths[1])<.01; assert all(np.max(np.abs(x.astype(float)))>100 for x in samples); [r.close() for r in readers]; print('Frozen audition WAVs: valid duration and non-silent samples')"
+    if ($LASTEXITCODE -ne 0) { throw 'Frozen harmonica audition verification failed.' }
     Write-Output "Both portable applications passed. Transcription: $($score.notes.Count) notes. Captures: output/smoke."
 } finally {
     foreach ($key in $savedEnvironment.Keys) {

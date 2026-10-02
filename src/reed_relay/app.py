@@ -17,6 +17,7 @@ def run(mode):
     parser = argparse.ArgumentParser()
     parser.add_argument("--screenshot")
     parser.add_argument("--binding-demo", action="store_true", help="显示按键捕获弹层供界面检查")
+    parser.add_argument("--audition-demo", action="store_true", help="静音播放当前曲谱，用于检查实际音频管线")
     parser.add_argument("--page", default="main")
     parser.add_argument("--demo", action="store_true")
     parser.add_argument("--no-hotkeys", action="store_true")
@@ -81,6 +82,9 @@ def run(mode):
         return 1
     if args.binding_demo:
         QTimer.singleShot(250,lambda:backend.beginBinding("note:0","音符 1"))
+    if args.audition_demo:
+        backend.audition.setVolume(0)
+        QTimer.singleShot(100,backend.auditionScore)
     app.aboutToQuit.connect(backend.close)
     if args.screenshot:
         def capture():
@@ -89,11 +93,13 @@ def run(mode):
             try:
                 if not engine.rootObjects()[0].property("pagesReady"):
                     app.exit(3); return
+                if args.audition_demo and (not backend.audition.playing or backend.audition.position <= 0):
+                    app.exit(4); return
                 ok = engine.rootObjects()[0].grabWindow().save(str(destination))
                 app.exit(0 if ok else 2)
             except Exception:
                 app.exit(2)
-        QTimer.singleShot(1200, capture)
+        QTimer.singleShot(2500 if args.audition_demo else 1200, capture)
     return app.exec()
 
 

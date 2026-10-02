@@ -89,8 +89,10 @@ def test_registration_and_disk_failure_keep_saved_and_active_profile(rig,monkeyp
     assert b._profile.keys[0]=='Z' and (d/'profile.json').read_bytes()==before
 
 
-def test_pages_load_and_launch_click_does_not_bind_left_mouse(rig):
+@pytest.mark.parametrize("mode",["player","converter"])
+def test_pages_load_and_launch_click_does_not_bind_left_mouse(rig,mode):
     app,b,d=rig
+    b.mode=mode
     b.loadDemo()
     engine=QQmlApplicationEngine()
     engine.rootContext().setContextProperty('bridge',b)
@@ -113,6 +115,14 @@ def test_pages_load_and_launch_click_does_not_bind_left_mouse(rig):
     assert not b.binding.active and b._profile.keys[0]=='J'
     root.setProperty('page','audition');app.processEvents()
     assert root.property('pagesReady') and not warnings
+    if mode == 'converter':
+        root.setProperty('page','main');app.processEvents()
+        preview=next(item for item in visual_items(root.contentItem()) if item.objectName()=='converterAudition')
+        QTest.mouseClick(root,Qt.MouseButton.LeftButton,Qt.KeyboardModifier.NoModifier,preview.mapToScene(preview.boundingRect().center()).toPoint())
+        app.processEvents()
+        assert root.property('page')=='audition'
+        wait_for(app,lambda:b.audition._loaded)
+        assert not warnings,warnings
     root.hide()
 
 
