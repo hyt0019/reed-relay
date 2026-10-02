@@ -23,6 +23,7 @@ def run(mode):
     parser.add_argument("--no-hotkeys", action="store_true")
     parser.add_argument("--score")
     parser.add_argument("--transcribe")
+    parser.add_argument('--import-scores', nargs='+', help='导入已有 MIDI/JSON 到配置的曲库，不启动界面；--output 可保存报告')
     parser.add_argument("--repair-score", help="修整已有曲谱碎音并另存，需 --output")
     parser.add_argument("--extract-score", help="从曲谱完整候选重新提取主旋律，需 --output")
     parser.add_argument("--minimum-pitch", type=int, default=0)
@@ -38,6 +39,25 @@ def run(mode):
     args = parser.parse_args()
     repair_options = {'minimum_ms':args.short_note_ms,'gap_ms':args.gap_ms,'merge_repeats':args.merge_repeats}
     melody_options = {'minimum_pitch':args.minimum_pitch, 'maximum_pitch':args.maximum_pitch}
+    if args.import_scores:
+        import json
+        from .storage import Storage
+        from .core.score import atomic_json
+        from .library import ScoreLibrary, default_library
+        storage = Storage()
+        preference_file = storage.directory/'preferences.json'
+        preferences = json.loads(preference_file.read_text(encoding='utf-8')) if preference_file.exists() else {}
+        library = ScoreLibrary(preferences.get('library_directory') or default_library(storage.directory))
+        imported, failures = [], []
+        for path in args.import_scores:
+            try:
+                result = library.import_score(path)
+                imported.append({'source':path, 'path':str(result.path), 'created':result.created})
+            except Exception as error: failures.append({'source':path, 'error':str(error)})
+        report = {'directory':str(library.directory), 'imported':imported, 'failures':failures, 'entries':library.scan()}
+        if args.output: atomic_json(args.output, report)
+        else: print(json.dumps(report, ensure_ascii=False))
+        return 1 if failures else 0
     if args.extract_score:
         if not args.output: parser.error('--extract-score 需要 --output')
         from .core.score import Score

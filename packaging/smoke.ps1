@@ -8,6 +8,8 @@ if ($LASTEXITCODE -ne 0) { throw 'Could not create the original calibration audi
 if ($LASTEXITCODE -ne 0) { throw 'Could not create fragment test score.' }
 & '.\.venv\Scripts\python.exe' -c "from reed_relay.core.score import Score,Note; ns=[Note(0,800,36),Note(0,400,60,cents=100/3),Note(400,400,62)]; meta={'engine':'Spotify Basic Pitch 0.4.0 / ONNX','pitch_bends_third_semitone':{ns[1].id:[1,1]}}; Score('Melody test',[ns[0]],800,original_notes=ns,metadata=meta).save('output/smoke/melody.json')"
 if ($LASTEXITCODE -ne 0) { throw 'Could not create melody test score.' }
+& '.\.venv\Scripts\python.exe' -c "from reed_relay.core.score import Score,Note; Score('Evening',[Note(120,400,62),Note(520,400,64)],1200).export_midi('output/smoke/library-source.mid')"
+if ($LASTEXITCODE -ne 0) { throw 'Could not create library test MIDI.' }
 $savedEnvironment = @{}
 foreach ($key in @('QT_QPA_PLATFORM','QT_QUICK_BACKEND','REED_RELAY_DATA_DIR','PYTHONPATH')) {
     $savedEnvironment[$key] = [Environment]::GetEnvironmentVariable($key, 'Process')
@@ -25,9 +27,19 @@ try {
     $env:QT_QUICK_BACKEND='software'
     $env:REED_RELAY_DATA_DIR=Join-Path $taskRoot 'local-data\smoke'
     $env:PYTHONPATH=''
+    Invoke-SmokeApp '.\dist\ReedRelay-Player\ReedRelay-Player.exe' @('--import-scores','output/smoke/library-source.mid','output/smoke/fragmented.json','--output','output/smoke/player-library.json')
+    Invoke-SmokeApp '.\dist\ReedRelay-Converter\ReedRelay-Converter.exe' @('--import-scores','output/smoke/library-source.mid','output/smoke/fragmented.json','--output','output/smoke/converter-library.json')
+    foreach ($libraryPath in @('player-library.json','converter-library.json')) {
+        $library = Get-Content (Join-Path 'output\smoke' $libraryPath) -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($library.imported.Count -ne 2 -or $library.failures.Count -ne 0 -or $library.entries.Count -lt 2 -or @($library.entries | Where-Object { $_.error }).Count -ne 0) { throw "Invalid library import: $libraryPath" }
+        $midiEntry = $library.entries | Where-Object { $_.filename -eq 'library-source.mid' }
+        if ($midiEntry.note_count -ne 2 -or $midiEntry.duration -ne 1200 -or $midiEntry.minimum_pitch -ne 62 -or $midiEntry.maximum_pitch -ne 64) { throw "Changed MIDI score in library: $libraryPath" }
+    }
     Invoke-SmokeApp '.\dist\ReedRelay-Player\ReedRelay-Player.exe' @('--demo','--screenshot','output/smoke/player.png')
     Invoke-SmokeApp '.\dist\ReedRelay-Player\ReedRelay-Player.exe' @('--page','settings','--screenshot','output/smoke/settings.png')
     Invoke-SmokeApp '.\dist\ReedRelay-Player\ReedRelay-Player.exe' @('--page','storage','--screenshot','output/smoke/storage.png')
+    Invoke-SmokeApp '.\dist\ReedRelay-Player\ReedRelay-Player.exe' @('--page','library','--screenshot','output/smoke/library.png')
+    Invoke-SmokeApp '.\dist\ReedRelay-Converter\ReedRelay-Converter.exe' @('--page','library','--screenshot','output/smoke/converter-library.png')
     Invoke-SmokeApp '.\dist\ReedRelay-Player\ReedRelay-Player.exe' @('--demo','--page','audition','--screenshot','output/smoke/audition.png')
     Invoke-SmokeApp '.\dist\ReedRelay-Player\ReedRelay-Player.exe' @('--page','settings','--binding-demo','--screenshot','output/smoke/binding.png')
     Invoke-SmokeApp '.\dist\ReedRelay-Converter\ReedRelay-Converter.exe' @('--transcribe','output/smoke/calibration.wav','--output','output/smoke/score.json')
@@ -51,7 +63,7 @@ try {
         $repaired = Get-Content (Join-Path 'output\smoke' $repairedPath) -Raw -Encoding UTF8 | ConvertFrom-Json
         if ($repaired.notes.Count -ne 2 -or $repaired.original_notes.Count -ne 3 -or $repaired.duration_ms -ne 6600 -or $repaired.notes[1].start_ms -ne 225) { throw "Invalid fragment repair: $repairedPath" }
     }
-    foreach ($path in @('player.png','settings.png','storage.png','audition.png','binding.png','converter.png','converter-audition.png','player-transport.png','converter-transport.png')) {
+    foreach ($path in @('player.png','settings.png','storage.png','library.png','converter-library.png','audition.png','binding.png','converter.png','converter-audition.png','player-transport.png','converter-transport.png')) {
         if ((Get-Item (Join-Path 'output\smoke' $path)).Length -lt 10000) { throw "Invalid screenshot: $path" }
     }
     & '.\.venv\Scripts\python.exe' -c "import wave,numpy as np; from pathlib import Path; files=[Path('output/smoke/player-harmonica.wav'),Path('output/smoke/converter-harmonica.wav')]; [None for p in files if p.stat().st_size>10000]; readers=[wave.open(str(p)) for p in files]; lengths=[r.getnframes()/r.getframerate() for r in readers]; samples=[np.frombuffer(r.readframes(r.getnframes()),dtype='<i2') for r in readers]; assert abs(lengths[0]*1.25-lengths[1])<.01; assert all(np.max(np.abs(x.astype(float)))>100 for x in samples); [r.close() for r in readers]; print('Frozen audition WAVs: valid duration and non-silent samples')"

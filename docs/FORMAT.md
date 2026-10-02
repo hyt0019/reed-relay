@@ -16,4 +16,6 @@
 
 `melody_minimum` / `melody_maximum` 保存旋律候选的 MIDI 音域（默认 0 / 127），不改音高；新转写的 `metadata.melody_selection` 记录 `register-path-v2` 与范围。完整候选不受范围影响。`metadata.pitch_policy` 说明新 Basic Pitch 候选按 MIDI 半音发声，`pitch_bends_third_semitone` 仅保留原始分析数据，不直接转成可信的 `Note.cents`。手工和其他来源的音分仍由 `Note.cents` 保存。
 
+`preferences.json.library_directory` 为两个模块共享的本地曲库目录。曲库直接索引该文件夹及子文件夹的 MIDI/JSON 文件，不额外维护易失效的索引文件；无效曲谱仍显示错误。播放列表保存绝对曲谱路径，不删除源曲库文件。外部导入按内容 SHA-256 去重，同名不同内容通过独占创建编号副本避免覆盖；曲谱数据不转换、不移调。
+
 程序旁 `storage-location.json` 的 `directory` 保存数据目录绝对路径；该文件和用户数据不提交 Git。切换目录复制持久文件并重写目录内绝对路径，不覆盖有不同内容的目标文件，不搬走或删除原目录。

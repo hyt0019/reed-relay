@@ -21,6 +21,7 @@ ScrollView {
                 Muted { text: "保留原调。还原歌声旋律时，请使用含人声的原曲或 MIDI。" }
             }
             Item { Layout.fillWidth: true }
+            ActionButton { text:"导入曲谱";enabled:!bridge.busy;onClicked:bridge.openScores() }
             ActionButton { text: "恢复自动保存"; enabled: !bridge.busy; onClicked: bridge.recoverProject() }
             ActionButton { text: "关联原音"; enabled: !bridge.busy; onClicked: bridge.relinkAudio() }
             ActionButton { text: "打开工程 / MIDI"; enabled: !bridge.busy; onClicked: bridge.openProject() }

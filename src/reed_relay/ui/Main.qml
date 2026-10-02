@@ -16,9 +16,9 @@ ApplicationWindow {
     palette.highlight: "#2362ba"
     palette.text: "#17343b"
     palette.buttonText: "#17343b"
-    property string page: ["settings","audition","storage"].indexOf(initialPage)>=0 ? initialPage : "main"
+    property string page: ["settings","audition","storage","library"].indexOf(initialPage)>=0 ? initialPage : "main"
     property var binding: bridge.bindingController
-    property bool pagesReady: mainLoader.status===Loader.Ready && auditionLoader.status===Loader.Ready && settingsLoader.status===Loader.Ready && storageLoader.status===Loader.Ready
+    property bool pagesReady: mainLoader.status===Loader.Ready && auditionLoader.status===Loader.Ready && settingsLoader.status===Loader.Ready && storageLoader.status===Loader.Ready && libraryLoader.status===Loader.Ready
     function reloadDraft() { if(settingsLoader.item)settingsLoader.item.reload() }
     function profileDraft() { return settingsLoader.item ? settingsLoader.item.profileDraft() : bridge.profile }
     function noteName(n) { return ["C","C♯","D","D♯","E","F","F♯","G","G♯","A","A♯","B"][((n%12)+12)%12] + (Math.floor(n/12)-1) }
@@ -87,18 +87,20 @@ ApplicationWindow {
                 anchors.top: parent.top; anchors.topMargin: 24; anchors.horizontalCenter: parent.horizontalCenter; spacing: 13
                 ActionButton { text: bridge.appMode === "player" ? "演奏" : "听谱"; primary: root.page === "main"; implicitWidth: 63; implicitHeight: 57; onClicked: root.page="main" }
                 ActionButton { text: "试听"; primary: root.page === "audition"; implicitWidth: 63; implicitHeight: 57; onClicked: root.page="audition" }
+                ActionButton { objectName:"libraryNavigation";text:"曲库";primary:root.page==="library";implicitWidth:63;implicitHeight:57;onClicked:{bridge.refreshLibrary();root.page="library"} }
                 ActionButton { text: "按键"; primary: root.page === "settings"; implicitWidth: 63; implicitHeight: 57; onClicked: { root.reloadDraft(); root.page="settings" } }
                 ActionButton { text: "存储"; primary: root.page === "storage"; implicitWidth: 63; implicitHeight: 57; onClicked: root.page="storage" }
             }
-            Label { anchors.bottom: parent.bottom; anchors.bottomMargin: 26; anchors.horizontalCenter: parent.horizontalCenter; text: "0.2.2"; color: "#78918e"; font.pixelSize: 12 }
+            Label { anchors.bottom: parent.bottom; anchors.bottomMargin: 26; anchors.horizontalCenter: parent.horizontalCenter; text: "0.3.0"; color: "#78918e"; font.pixelSize: 12 }
         }
         StackLayout {
             Layout.fillWidth:true;Layout.fillHeight:true
-            currentIndex:root.page==="storage"?3:root.page==="settings"?2:root.page==="audition"?1:0
+            currentIndex:root.page==="library"?4:root.page==="storage"?3:root.page==="settings"?2:root.page==="audition"?1:0
             Loader { id:mainLoader;sourceComponent:bridge.appMode==="player"?playerPage:converterPage }
             Loader { id:auditionLoader;source:"Audition.qml" }
             Loader { id:settingsLoader;source:"Settings.qml" }
             Loader { id:storageLoader;source:"Storage.qml" }
+            Loader { id:libraryLoader;source:"Library.qml";onLoaded:{item.requestMain.connect(function(){root.page="main"});item.requestAudition.connect(function(){root.page="audition"})} }
         }
     }
     Component {
@@ -114,7 +116,8 @@ ApplicationWindow {
                     Label { text: "准备好，下一首。"; color: "#17343b"; font.pixelSize: 27; font.bold: true }
                     Item { Layout.fillWidth: true }
                     ActionButton { text: "载入练习曲"; onClicked: bridge.loadDemo() }
-                    ActionButton { text: "+ 添加曲谱"; onClicked: bridge.openScores() }
+                    ActionButton { text: "打开曲库"; onClicked: { bridge.refreshLibrary();root.page="library" } }
+                    ActionButton { text: "导入曲谱"; onClicked: bridge.openScores() }
                 }
                 RowLayout {
                     Layout.leftMargin: 27; Layout.rightMargin: 27; Layout.fillWidth: true; spacing: 21

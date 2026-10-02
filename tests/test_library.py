@@ -135,3 +135,23 @@ def test_midi_tempo_changes_and_overlaps_survive_import(tmp_path):
     imported = ScoreLibrary(tmp_path/'library').import_score(source)
     notes = read_score(imported.path).notes
     assert [(n.midi_pitch, n.start_ms, n.end_ms) for n in notes] == [(60,0,1500),(64,250,2000)]
+
+
+def test_data_directory_move_keeps_embedded_library_and_playlist_usable(tmp_path, monkeypatch):
+    app = QApplication.instance() or QApplication([])
+    import reed_relay.storage as storage_module
+    monkeypatch.setattr(storage_module, 'application_root', lambda:tmp_path/'program')
+    monkeypatch.setenv('REED_RELAY_DATA_DIR', str(tmp_path/'data'))
+    backend = Backend('player', no_hotkeys=True)
+    source = tmp_path/'source.json'
+    Score('Move', [Note(0, 400, 64)]).save(source)
+    backend.importScoreFiles(json.dumps([source.as_uri()]))
+    old_library = Path(backend.libraryPath)
+    backend.storage.fixed = False
+    new_data = tmp_path/'new-data'
+    backend.setStoragePath(str(new_data))
+    assert Path(backend.libraryPath) == new_data/'演奏库'
+    assert len(backend.libraryEntries) == 1 and old_library.joinpath('source.json').exists()
+    assert backend.openLibraryScore(backend.libraryEntries[0]['path'])
+    assert all(Path(item['path']).is_relative_to(new_data) for item in backend.playlist)
+    backend.close()
