@@ -5,10 +5,11 @@ from pathlib import Path
 import threading
 import numpy as np
 from reed_relay.core.score import Note, Score, extract_melody
+from reed_relay.core.melody import repair_melody
 from .audio import decode, waveform_peaks, check_cancel
 
 
-def transcribe(path, melody=True, cancel=None, progress=lambda *args: None):
+def transcribe(path, melody=True, cancel=None, progress=lambda *args: None, *, minimum_ms=80., gap_ms=50., merge_repeats=False):
     cancel = cancel or threading.Event()
     path = Path(path)
     progress(.01, "正在解码音频", None)
@@ -56,11 +57,13 @@ def transcribe(path, melody=True, cancel=None, progress=lambda *args: None):
         if bend: bends[note.id] = [int(v) for v in bend]
     notes.sort(key=lambda n: (n.start_ms, n.midi_pitch))
     progress(.95, "生成可校对曲谱", None)
-    score = Score(path.stem, extract_melody(notes) if melody else list(notes), duration_ms,
+    draft = repair_melody(extract_melody(notes), minimum_ms, gap_ms, merge_repeats) if melody else list(notes)
+    score = Score(path.stem, draft, duration_ms,
                   source_file=str(path.resolve()), original_notes=list(notes),
                   metadata={"engine": "Spotify Basic Pitch 0.4.0 / ONNX", "mode": "melody" if melody else "all-notes",
                             "waveform": waveform_peaks(audio),
                             "bpm_estimated": False, "confidence_kind": "model activation, not calibrated probability",
+                            "melody_repair": {"minimum_ms":minimum_ms,"gap_ms":gap_ms,"merge_repeats":merge_repeats} if melody else None,
                             "pitch_bends_third_semitone": bends,
                             "notice": "原始候选完整保留；主旋律为可编辑的自动简化，混音歌曲需要试听校对。"})
     score.validate()

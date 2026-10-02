@@ -164,30 +164,6 @@ class Score:
 
 
 def extract_melody(notes: list[Note]) -> list[Note]:
-    """An explicit, editable monophonic reduction; callers retain original notes."""
-    if not notes:
-        return []
-    starts, ends = {}, {}
-    for n in notes:
-        starts.setdefault(round(n.start_ms, 3), []).append(n)
-        ends.setdefault(round(n.end_ms, 3), []).append(n)
-    times = sorted(set(starts) | set(ends))
-    active, result, previous_pitch = {}, [], None
-    for i, time in enumerate(times[:-1]):
-        for n in ends.get(time, []):
-            active.pop(n.id, None)
-        for n in starts.get(time, []):
-            active[n.id] = n
-        if not active:
-            continue
-        chosen = max(active.values(), key=lambda n: n.confidence + n.midi_pitch * .006 -
-                     (abs(n.midi_pitch - previous_pitch) * .008 if previous_pitch is not None else 0))
-        until = times[i + 1]
-        if until - time < .1:
-            continue
-        if result and result[-1].id.startswith(chosen.id + "_") and abs(result[-1].end_ms - time) < .01:
-            result[-1] = replace(result[-1], duration_ms=until - result[-1].start_ms)
-        else:
-            result.append(replace(chosen, start_ms=time, duration_ms=until - time, id=f"{chosen.id}_{i}"))
-        previous_pitch = chosen.midi_pitch
-    return result
+    """An editable monophonic path; callers retain the complete candidates."""
+    from .melody import select_melody
+    return select_melody(notes)
