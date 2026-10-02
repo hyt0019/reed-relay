@@ -115,10 +115,12 @@ def test_seek_keeps_game_countdown_and_focus_guard(rig, monkeypatch):
         def close(self): pass
     b.hotkeys.close()
     b.hotkeys = Keys()
-    b._windows = [{'hwnd':123}]
+    b._windows = [{'handle':123, 'pid':456, 'title':'Test game'}]
     focused = [True]
     monkeypatch.setattr(module, 'WindowsOutput', PreviewOutput)
     monkeypatch.setattr(module, 'focus_guard', lambda window:lambda:focused[0])
+    monkeypatch.setattr(module, 'window_alive', lambda window:True)
+    monkeypatch.setattr(module, 'input_permission_status', lambda window:{'status':'ready', 'message':'ready'})
     b.configurePlayer(False, 1., 1., 0, False, False, 0)
     b.seekPlayer(2200)
     b.toggle()

@@ -19,6 +19,7 @@ from reed_relay.core.profile import Profile, make_plan
 from reed_relay.core.tuning import tone, detect_frequency, describe_frequency
 from reed_relay.core.calibration import GuidedCalibration
 from reed_relay.player.engine import PlayerEngine, PreviewOutput
+from reed_relay.player.permissions import input_permission_status
 from reed_relay.player.windows import Hotkeys, WindowsOutput, windows, focus_guard, held_controls, window_alive, monitor_name
 from reed_relay.audition import Audition
 from reed_relay.binding import BindingCapture
@@ -55,6 +56,8 @@ class Backend(QObject):
         self._player_session, self._player_seeking = 0, False
         self._preview, self._speed, self._delay, self._transpose = True, 1., 3., 0
         self._melody, self._skip, self._target = False, False, -1
+        self._input_status = {'status':'unselected', 'requires_admin':False, 'message':'请选择目标游戏窗口'}
+        self._player_start_error = ''
         self._auto_continue = False
         self._initial_options = {"speed":100,"delay":3,"transpose":0,"melody":False,"skip":False,"auto_continue":False}
         self._long_policy, self._repeat_gap = "hold", 35.
@@ -175,6 +178,12 @@ class Backend(QObject):
         return [entry | {'in_playlist':entry['path'] in queued} for entry in self._library_entries]
     @Property("QVariantList", notify=windowsChanged)
     def windowList(self): return self._windows
+    @Property(int, notify=changed)
+    def targetIndex(self): return self._target
+    @Property('QVariantMap', notify=changed)
+    def inputStatus(self): return self._input_status
+    @Property(str, notify=changed)
+    def playerStartError(self): return self._player_start_error
     @Property("QVariantList", notify=issuesChanged)
     def issues(self): return self._issues
     @Property("QVariantList", notify=scoreChanged)
@@ -379,6 +388,7 @@ class Backend(QObject):
         elif kind == "countdown": self._message = f"{value:.1f} 秒后开始，请切换至游戏窗口"
         elif kind == "finished":
             self._state, self._message, self._active_pitch, self._active_key = "待机", value, -1, ""
+            self._player_start_error = value if value not in {'演奏结束', '已停止'} else ''
         elif kind == "hotkeys": self._hotkey_status = value
         elif kind == "error": self._message = value
         elif kind == "conversion":
@@ -610,9 +620,15 @@ class Backend(QObject):
 
     @Slot(bool, float, float, int, bool, bool, int, bool)
     def configurePlayer(self, preview, speed, delay, transpose, melody, skip, target, auto_continue=False):
+        if self.engine.running and (target != self._target or preview != self._preview): self.stop()
         self._preview, self._speed, self._delay, self._transpose = preview, speed, delay, transpose
-        self._melody, self._skip, self._target = melody, skip, target
+        self._melody, self._skip = melody, skip
+        target = target if 0 <= target < len(self._windows) else -1
+        if target != self._target:
+            self._target = target
+            self._update_input_status()
         self._auto_continue=auto_continue
+        self._player_start_error = ''
         try:
             self._save_preferences()
         except OSError as e: self._message=f"无法保存演奏偏好：{e}"
@@ -653,11 +669,20 @@ class Backend(QObject):
         if self.running:
             # The worker may have finished before Qt drains its final reports.
             self.stop()
+        self._player_start_error = ''
         try:
-            if not self._preview and not self.hotkeys.ready:
-                raise ValueError("全局热键尚未就绪，请先解决底部显示的热键冲突")
-            if not self._preview and not 0 <= self._target < len(self._windows):
-                raise ValueError("请选择目标游戏窗口")
+            if not self._preview:
+                if not 0 <= self._target < len(self._windows):
+                    raise ValueError("请选择目标游戏窗口")
+                if not window_alive(self._windows[self._target]):
+                    self._input_status = {'status':'closed', 'requires_admin':False,
+                        'message':'目标游戏窗口已关闭或已重建，请刷新并重新选择'}
+                    raise ValueError(self._input_status['message'])
+                self._update_input_status()
+                if self._input_status['status'] == 'blocked':
+                    raise ValueError(self._input_status['message'])
+                if not self.hotkeys.ready:
+                    raise ValueError("全局热键尚未就绪，请先解决热键冲突")
             self.stopAudio()
             plan = self._plan()
             self._issues = plan.issues
@@ -673,7 +698,7 @@ class Backend(QObject):
             self._progress = start_ms
             self._state = "演奏中" if self._preview or not self._delay else "倒计时"
             self._message = "预演中：未发送按键" if self._preview else "准备向选定游戏窗口发送按键"
-        except Exception as e: self._message = str(e)
+        except Exception as e: self._message = self._player_start_error = str(e)
         self.changed.emit()
 
     @Slot()
@@ -690,6 +715,7 @@ class Backend(QObject):
             if was_running:
                 self._progress = min(self._score.duration_ms, self.engine.position_ms)
                 self._message = self.engine.result or "已停止"
+                self._player_start_error = self.engine.result if self.engine.result not in {'演奏结束', '已停止', ''} else ''
             self._state, self._active_pitch, self._active_key = "待机", -1, ""
         self.changed.emit()
 
@@ -720,10 +746,23 @@ class Backend(QObject):
 
     @Slot()
     def refreshWindows(self):
-        try: self._windows = windows()
-        except Exception as e: self._message = str(e)
+        selected = self._windows[self._target] if 0 <= self._target < len(self._windows) else None
+        try:
+            refreshed = windows()
+            self._target = next((i for i, item in enumerate(refreshed) if selected and
+                (item.get('handle'), item.get('pid')) == (selected.get('handle'), selected.get('pid'))), -1)
+            self._windows = refreshed
+            if selected and self._target < 0:
+                self.stop()
+                self._message = '目标游戏窗口已关闭或已重建，请重新选择'
+            self._update_input_status()
+        except Exception as e: self._message = f'窗口列表读取失败：{e}'
         self.windowsChanged.emit()
         self.changed.emit()
+
+    def _update_input_status(self):
+        self._input_status = input_permission_status(self._windows[self._target]) if 0 <= self._target < len(self._windows) else {
+            'status':'unselected', 'requires_admin':False, 'message':'请选择目标游戏窗口'}
 
     @Slot(str)
     def saveProfile(self, raw):
