@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
+import math
 import json
 from pathlib import Path
 from .score import Note, Score, atomic_json, number, pitch_name
@@ -49,13 +50,14 @@ class Modifier:
 
 @dataclass
 class Profile:
-    name: str = "默认口琴（待校准）"
+    name: str = "游戏口琴 · 内置预设"
     keys: list[str] = field(default_factory=lambda: ["Z", "X", "C", "V", "B", "N", "M", ","])
     pitches: list[int] = field(default_factory=lambda: [60, 62, 64, 65, 67, 69, 71, 72])
     modifiers: list[Modifier] = field(default_factory=lambda: [Modifier("降调", "MOUSE_LEFT", -12), Modifier("半音", "MOUSE_MIDDLE", 1), Modifier("升调", "MOUSE_RIGHT", 12)])
     combinations: list[list[int]] = field(default_factory=lambda: [[], [0], [1], [2], [0, 1], [1, 2]])
     reference_hz: float = 440
     calibrated: bool = False
+    pitch_source: str = "sample-inferred"
     hotkeys: dict = field(default_factory=lambda: {"toggle": "F8", "previous": "F6", "next": "F7", "emergency": "F10"})
     schema_version: int = 1
 
@@ -88,6 +90,8 @@ class Profile:
             raise ValueError("热键与演奏键冲突，请使用其他热键")
         if type(self.calibrated) is not bool:
             raise ValueError("校准状态无效")
+        if self.pitch_source not in {"sample-inferred", "custom", "measured"}:
+            raise ValueError("音高来源无效")
         return self
 
     def to_dict(self):
@@ -97,6 +101,14 @@ class Profile:
     @classmethod
     def from_dict(cls, data):
         data = dict(data)
+        if "pitch_source" not in data:
+            data["pitch_source"] = "measured" if data.get("calibrated") else "custom"
+            template = (data.get("name") == "默认口琴（待校准）" and
+                        data.get("pitches") == [60,62,64,65,67,69,71,72] and
+                        [m.get("semitones") for m in data.get("modifiers", [])] == [-12,1,12] and
+                        data.get("reference_hz",440) == 440 and not data.get("calibrated"))
+            if template:
+                data["name"], data["pitch_source"] = "游戏口琴 · 内置预设", "sample-inferred"
         data["modifiers"] = [Modifier(**v) for v in data.get("modifiers", [])]
         try:
             return cls(**data).validate()
@@ -138,17 +150,24 @@ class Plan:
     issues: list[dict]
     duration_ms: float
     note_count: int
+    notes: list[Note] = field(default_factory=list)
 
     @property
     def playable(self):
         return self.note_count > 0 and not any(i["blocking"] for i in self.issues)
 
 
-def make_plan(score: Score, profile: Profile, transpose=0, skip_unmapped=False) -> Plan:
+def make_plan(score: Score, profile: Profile, transpose=0, skip_unmapped=False, *,
+              speed=1., long_note_policy="hold", repeat_gap_ms=35., long_note_ms=2600.) -> Plan:
     score.validate()
     number(transpose, "演奏移调", -48, 48)
     if type(transpose) is not int:
         raise ValueError("移调须为整数半音")
+    number(speed, "演奏速度", .25, 2)
+    number(repeat_gap_ms, "同音松键间隔", 0, 150)
+    number(long_note_ms, "长音重奏阈值", 1000, 2900)
+    if long_note_policy not in {"hold", "rearticulate"}:
+        raise ValueError("长音处理方式无效")
     mapping, events, issues, playable = profile.mapping(), [], [], []
     for n in score.notes:
         pitch = n.midi_pitch + transpose
@@ -159,16 +178,35 @@ def make_plan(score: Score, profile: Profile, transpose=0, skip_unmapped=False) 
             issues.append({"id": n.id, "message": "离散按键无法精确还原滑音/音分偏移", "blocking": False, "kind": "cents"})
         if n.confidence < .5:
             issues.append({"id": n.id, "message": "识别置信度较低，建议试听", "blocking": False, "kind": "confidence"})
-        playable.append(n)
-        key, mods = mapping[pitch]
-        events.extend([Event(n.start_ms, True, key, n.id, pitch, 3), Event(n.end_ms, False, key, n.id, pitch, 0)])
-        for mod in mods:
-            events.extend([Event(n.start_ms, True, mod, priority=2), Event(n.end_ms, False, mod, priority=1)])
+        playable.append(replace(n, midi_pitch=pitch))
     end = -1
     for n in playable:
         if n.start_ms < end - .01:
             issues.append({"id": n.id, "message": "存在重叠音，请选择主旋律或编辑时长", "blocking": True, "kind": "overlap"})
         end = max(end, n.end_ms)
+    rendered = []
+    for n in playable:
+        real_duration = n.duration_ms/speed
+        if real_duration > 2900:
+            message = "单音超过约三秒，可能出现气息抖动" if long_note_policy == "hold" else "长音分段重奏，会重新起音"
+            issues.append({"id":n.id,"message":message,"blocking":False,"kind":"long-note"})
+        count = math.ceil(real_duration/long_note_ms) if long_note_policy == "rearticulate" and real_duration > 2900 else 1
+        segment = n.duration_ms/count
+        for i in range(count):
+            rendered.append(replace(n, start_ms=n.start_ms+i*segment, duration_ms=segment))
+    # Keep the next onset on the original beat; make room before it only when
+    # retriggering the same pitch. Switching notes never accumulates a breath gap.
+    for i, n in enumerate(rendered):
+        if i+1 < len(rendered):
+            nxt = rendered[i+1]
+            available = nxt.start_ms-n.end_ms
+            if n.midi_pitch == nxt.midi_pitch and 0 <= available < repeat_gap_ms*speed:
+                duration = max(n.duration_ms*.5, nxt.start_ms-repeat_gap_ms*speed-n.start_ms)
+                rendered[i] = n = replace(n, duration_ms=duration)
+        key, mods = mapping[n.midi_pitch]
+        events.extend([Event(n.start_ms, True, key, n.id, n.midi_pitch, 3), Event(n.end_ms, False, key, n.id, n.midi_pitch, 0)])
+        for mod in mods:
+            events.extend([Event(n.start_ms, True, mod, priority=2), Event(n.end_ms, False, mod, priority=1)])
     if abs(score.reference_hz - profile.reference_hz) > .5:
         issues.append({"id": "", "message": "曲谱与场景的 A4 参考频率不同，请校准后确认音高", "blocking": False, "kind": "tuning"})
-    return Plan(sorted(events, key=lambda e: (e.at_ms, e.priority)), issues, score.duration_ms, len(playable))
+    return Plan(sorted(events, key=lambda e: (e.at_ms, e.priority)), issues, score.duration_ms, len(playable), rendered)

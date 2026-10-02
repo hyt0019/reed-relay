@@ -21,7 +21,7 @@ reed-converter = "reed_relay.app:converter_main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-reed_relay = ["ui/*.qml"]
+reed_relay = ["ui/*.qml", "assets/*.json"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
