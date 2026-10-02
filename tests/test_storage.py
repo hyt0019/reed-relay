@@ -113,3 +113,78 @@ def test_legacy_collision_is_reported_without_overwrite_or_c_drive_fallback(loca
     assert storage.directory == root/'local-data'
     assert '失败' in storage.notice
     assert json.loads((storage.directory/'profile.json').read_text()) == {'source':'new'}
+
+
+def test_export_suggestions_stay_under_selected_directory(locations):
+    from reed_relay.storage import suggested_file
+    root, _ = locations
+    path = Path(suggested_file(root, '../C:/artist/曲谱', '.reedscore.json'))
+    assert path.parent == root and '/' not in path.name and ':' not in path.name
+    assert Path(suggested_file(root, 'CON', '.json')).name == '_CON.json'
+
+
+def test_explicit_first_location_never_falls_back_after_write_failure(locations, monkeypatch):
+    root, old = locations
+    atomic_json(old/'profile.json', {'key':'Z'})
+    target = root/'first-choice'
+    monkeypatch.setattr(storage_module, 'atomic_json', lambda *_: (_ for _ in ()).throw(OSError('read-only')))
+    with pytest.raises(OSError): Storage(initial_directory=target)
+    assert not (root/'local-data').exists() and not (root/'storage-location.json').exists()
+    assert not (target/'profile.json').exists() and (old/'profile.json').exists()
+
+
+def test_actual_gui_directory_picker_repair_undo_and_export(locations, monkeypatch):
+    from reed_relay.backend import Backend
+    from PySide6.QtCore import QUrl, Qt
+    from PySide6.QtQml import QQmlApplicationEngine
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QFileDialog
+    root_dir, _ = locations
+    app = QApplication.instance() or QApplication([])
+    backend = Backend('converter', no_hotkeys=True)
+    original = [Note(0, 200, 60), Note(200, 12, 84), Note(225, 200, 62)]
+    backend._score = Score('点击修整', list(original), 600)
+    backend.scoreChanged.emit()
+    engine = QQmlApplicationEngine()
+    engine.rootContext().setContextProperty('bridge', backend)
+    engine.rootContext().setContextProperty('initialPage', 'storage')
+    warnings = []
+    engine.warnings.connect(lambda values: warnings.extend(str(v) for v in values))
+    engine.load(QUrl.fromLocalFile(str(Path(__file__).parents[1]/'src/reed_relay/ui/Main.qml')))
+    window = engine.rootObjects()[0]
+    app.processEvents()
+    assert window.property('pagesReady') and not warnings
+    def items(item):
+        yield item
+        for child in item.childItems(): yield from items(child)
+    def click(name):
+        button = next(item for item in items(window.contentItem()) if item.objectName() == name and item.isVisible())
+        QTest.mouseClick(window, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier,
+                         button.mapToScene(button.boundingRect().center()).toPoint())
+        app.processEvents()
+    target = root_dir/'selected-by-dialog'
+    monkeypatch.setattr(QFileDialog, 'getExistingDirectory', lambda *_: str(target))
+    click('chooseStorage')
+    assert backend.data_dir == target
+    path_field = next(item for item in items(window.contentItem()) if item.objectName() == 'storagePath')
+    assert path_field.property('text') == str(target)
+    window.setProperty('page', 'audition'); app.processEvents()
+    click('repairApply')
+    assert len(backend._score.notes) == 2 and backend._score.notes[0].end_ms == 225
+    assert backend._score.original_notes == original and backend.duration == 600
+    assert Score.load(target/'autosave.reedscore.json').notes == backend._score.notes
+    click('repairUndo')
+    assert backend._score.notes == original
+    backend.configureRepair(0, 0, False)
+    backend.repairCurrent()
+    assert backend._score.notes == original
+    destination = target/'export.reedscore.json'
+    suggested = []
+    monkeypatch.setattr(QFileDialog, 'getSaveFileName', lambda *args: (suggested.append(args[2]) or str(destination), ''))
+    backend.exportScore('json')
+    assert Path(suggested[0]).parent == target and Score.load(destination).notes == original
+    backend.configureRepair(500, 0, False)
+    backend.repairCurrent()
+    assert backend._score.notes == original and '没有音符' in backend.message
+    assert not warnings, warnings
+    window.hide(); backend.close(); app.processEvents()

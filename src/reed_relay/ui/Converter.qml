@@ -73,6 +73,7 @@ ScrollView {
                     Muted { text: "橙色为低模型分数，建议优先试听"; color: "#ad784d" }
                     ComboBox { id: zoom; model: ["12 秒视窗", "24 秒视窗", "48 秒视窗"]; implicitWidth: 125 }
                 }
+                MelodyTools { Layout.fillWidth:true }
                 PianoRoll { Layout.fillWidth: true; Layout.preferredHeight: 155; notes: bridge.notes; selected: bridge.selectedNote; startMs: viewStart.value; spanMs: 12000*Math.pow(2,zoom.currentIndex); onPicked: function(index) { bridge.selectNote(index) } }
                 Slider { id: viewStart; Layout.fillWidth: true; from: 0; to: Math.max(0,bridge.duration-12000*Math.pow(2,zoom.currentIndex)); stepSize: 200; value: 0 }
                 RowLayout {

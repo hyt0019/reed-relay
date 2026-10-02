@@ -22,7 +22,7 @@ from reed_relay.player.engine import PlayerEngine, PreviewOutput
 from reed_relay.player.windows import Hotkeys, WindowsOutput, windows, focus_guard, held_controls, window_alive, monitor_name
 from reed_relay.audition import Audition
 from reed_relay.binding import BindingCapture
-from reed_relay.storage import Storage, rewrite_paths
+from reed_relay.storage import Storage, rewrite_paths, suggested_file
 from reed_relay.core.melody import repair_melody
 
 
@@ -63,6 +63,9 @@ class Backend(QObject):
         self._long_policy = self._initial_options.get("long_policy", "hold")
         self._repeat_gap = self._initial_options.get("repeat_gap", 35.)
         self._initial_options.update(long_policy=self._long_policy, repeat_gap=self._repeat_gap)
+        self._repair_minimum = self._initial_options.get('repair_minimum', 80.)
+        self._repair_gap = self._initial_options.get('repair_gap', 50.)
+        self._repair_merge = self._initial_options.get('repair_merge', False)
         self._tune, self._stream, self._mic_queue = {}, None, queue.Queue(maxsize=2)
         self._capture_source, self._capture_devices, self._capture_device = "system", [], -1
         self._loopback, self._capture_level, self._last_audio_time = None, 0., 0.
@@ -211,6 +214,9 @@ class Backend(QObject):
     def legacyStoragePath(self): return str(self.storage.legacy)
     @Property(bool, constant=True)
     def storageFixed(self): return self.storage.fixed
+    @Property('QVariantMap', notify=changed)
+    def repairDefaults(self):
+        return {'minimum':self._repair_minimum,'gap':self._repair_gap,'merge':self._repair_merge}
     @Property("QVariantList", notify=scoreChanged)
     def voices(self): return sorted({n.voice for n in self._score.notes})
 
@@ -246,8 +252,44 @@ class Backend(QObject):
             self._error(f'保存目录已更改：{new}；已有数据已复制，原目录保留')
         except Exception as error: self._error(f'保存目录未更改：{error}')
 
+    @Slot(bool)
+    def showStorage(self, legacy=False):
+        from PySide6.QtGui import QDesktopServices
+        path = self.storage.legacy if legacy else self.data_dir
+        if not path.is_dir(): self._error('该目录还不存在'); return
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(path))):
+            self._error('无法打开目录，请复制页面上的路径到资源管理器')
+
+    @Slot(float, float, bool)
+    def configureRepair(self, minimum, gap, merge):
+        if not 0 <= minimum <= 500 or not 0 <= gap <= 250: return
+        self._repair_minimum, self._repair_gap, self._repair_merge = minimum, gap, merge
+        try: self._save_preferences()
+        except OSError as error: self._error(error)
+        self.changed.emit()
+
+    @Slot()
+    def repairCurrent(self):
+        if self._busy or self.binding.active: return
+        try:
+            before = self._score.notes
+            repaired = repair_melody(before, self._repair_minimum, self._repair_gap, self._repair_merge)
+            if not repaired: raise ValueError('修整后没有音符，请降低碎音阈值，或设为 0 保留快速音符')
+            if repaired == before:
+                self._error('当前曲谱无需修整；可调整阈值后再试听'); return
+            self.stop(); self.stopAudio()
+            self._remember()
+            if not self._score.original_notes: self._score.original_notes = list(before)
+            self._score.notes, self._selected_note = repaired, -1
+            self._message = f'已连贯修整：{len(before)} → {len(repaired)} 个音符；可撤销，导出以保存当前曲谱'
+            self._edited()
+        except Exception as error: self._error(error)
+
     def _prepared_score(self):
-        return replace(self._score, notes=extract_melody(self._score.notes)) if self._melody else self._score
+        return replace(self._score, notes=self._reduce(self._score.notes)) if self._melody else self._score
+
+    def _reduce(self, notes):
+        return repair_melody(extract_melody(notes), self._repair_minimum, self._repair_gap, self._repair_merge)
 
     def _check(self):
         try:
@@ -432,7 +474,8 @@ class Backend(QObject):
     def _preferences(self):
         return {"speed":round(self._speed*100),"delay":self._delay,
                     "transpose":self._transpose,"melody":self._melody,"skip":self._skip,
-                    "auto_continue":self._auto_continue,"long_policy":self._long_policy,"repeat_gap":self._repeat_gap}
+                    "auto_continue":self._auto_continue,"long_policy":self._long_policy,"repeat_gap":self._repeat_gap,
+                    'repair_minimum':self._repair_minimum,'repair_gap':self._repair_gap,'repair_merge':self._repair_merge}
 
     @Slot(str, float)
     def configureArticulation(self, policy, gap):
@@ -518,7 +561,7 @@ class Backend(QObject):
 
     @Slot()
     def exportProfile(self):
-        path, _ = QFileDialog.getSaveFileName(None, "导出场景", str(self.data_dir/(self._profile.name + ".profile.json")), "场景 (*.json)")
+        path, _ = QFileDialog.getSaveFileName(None, "导出场景", suggested_file(self.data_dir,self._profile.name,".profile.json"), "场景 (*.json)")
         if path:
             try: self._profile.save(path); self._error("场景已导出")
             except Exception as e: self._error(e)
@@ -817,6 +860,7 @@ class Backend(QObject):
         self._busy, self._conversion_progress = True, 0
         self._conversion_cancel.clear()
         paths = list(self._audio_queue)
+        repair_options = {'minimum_ms':self._repair_minimum,'gap_ms':self._repair_gap,'merge_repeats':self._repair_merge}
         def worker():
             try:
                 from .converter.transcribe import transcribe
@@ -827,7 +871,7 @@ class Backend(QObject):
                         data = (info or {}) | {"path": path}
                         self.report.emit("conversion", ((i+value)/len(paths), f"{i+1}/{len(paths)}  {message}", data))
                     try:
-                        score = transcribe(path, melody, self._conversion_cancel, progress)
+                        score = transcribe(path, melody, self._conversion_cancel, progress, **repair_options)
                         target = self.data_dir / "conversions" / (Path(path).stem[:100] + "_" + uuid.uuid4().hex[:6] + ".reedscore.json")
                         score.save(target)
                         self.report.emit("converted", (score, str(target)))
@@ -978,7 +1022,8 @@ class Backend(QObject):
         self._remember()
         if not self._score.original_notes: self._score.original_notes=list(self._score.notes)
         source = self._score.original_notes
-        self._score.notes = extract_melody(source) if melody else list(source)
+        self.stop(); self.stopAudio()
+        self._score.notes = self._reduce(source) if melody else list(source)
         self._selected_note=-1
         self._edited()
 
@@ -995,7 +1040,7 @@ class Backend(QObject):
     def exportScore(self, kind):
         if self._busy or not self._score.notes: return
         suffix, filter_text = {"json": (".reedscore.json", "曲谱工程 (*.reedscore.json)"), "midi": (".mid", "MIDI (*.mid)"), "text": (".txt", "简谱 (*.txt)")}[kind]
-        path, _ = QFileDialog.getSaveFileName(None, "导出曲谱", str(self.data_dir/(self._score.title+suffix)), filter_text)
+        path, _ = QFileDialog.getSaveFileName(None, "导出曲谱", suggested_file(self.data_dir,self._score.title,suffix), filter_text)
         if path:
             if not path.lower().endswith(suffix): path+=suffix
             try:

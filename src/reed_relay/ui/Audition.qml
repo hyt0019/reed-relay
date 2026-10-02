@@ -58,10 +58,12 @@ ScrollView {
                     Label { text:"旋律时间轴";font.pixelSize:18;font.bold:true;color:"#17343b" }
                     Item { Layout.fillWidth:true }
                     Label { text:"点击音符可选中片段";font.pixelSize:12;color:"#647e82" }
+                    ActionButton { text:"重提主旋律";enabled:!bridge.busy && bridge.notes.length>0;onClicked:bridge.changeReduction(true) }
                     ActionButton { text:"循环选中音符";enabled:bridge.selectedNote>=0;onClicked:bridge.auditionSelected() }
                 }
+                MelodyTools { Layout.fillWidth:true }
                 Item {
-                    Layout.fillWidth:true;Layout.preferredHeight:220
+                    Layout.fillWidth:true;Layout.preferredHeight:145
                     PianoRoll { id:roll;anchors.fill:parent;notes:bridge.notes;selected:bridge.selectedNote;spanMs:12000;startMs:Math.floor(page.transport.position/12000)*12000;onPicked:function(index){bridge.selectNote(index)} }
                     Rectangle { x:44+((page.transport.position-roll.startMs)/roll.spanMs)*(parent.width-44);y:20;width:2;height:parent.height-20;color:"#d98b60" }
                 }

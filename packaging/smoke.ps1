@@ -4,6 +4,8 @@ $taskRoot = $PWD.Path
 New-Item -ItemType Directory -Force 'output\smoke' | Out-Null
 & '.\.venv\Scripts\python.exe' -c "from pathlib import Path; from reed_relay.core.score import Score; from reed_relay.converter.audio import synthesize; synthesize(Score.load(next(Path('examples').glob('*.reedscore.json'))), 'output/smoke/calibration.wav')"
 if ($LASTEXITCODE -ne 0) { throw 'Could not create the original calibration audio.' }
+& '.\.venv\Scripts\python.exe' -c "from reed_relay.core.score import Score,Note; ns=[Note(0,200,60),Note(200,12,84),Note(225,200,62)]; Score('Repair test',ns,6600,original_notes=ns).save('output/smoke/fragmented.json')"
+if ($LASTEXITCODE -ne 0) { throw 'Could not create fragment test score.' }
 $savedEnvironment = @{}
 foreach ($key in @('QT_QPA_PLATFORM','QT_QUICK_BACKEND','REED_RELAY_DATA_DIR','PYTHONPATH')) {
     $savedEnvironment[$key] = [Environment]::GetEnvironmentVariable($key, 'Process')
@@ -23,6 +25,7 @@ try {
     $env:PYTHONPATH=''
     Invoke-SmokeApp '.\dist\ReedRelay-Player\ReedRelay-Player.exe' @('--demo','--screenshot','output/smoke/player.png')
     Invoke-SmokeApp '.\dist\ReedRelay-Player\ReedRelay-Player.exe' @('--page','settings','--screenshot','output/smoke/settings.png')
+    Invoke-SmokeApp '.\dist\ReedRelay-Player\ReedRelay-Player.exe' @('--page','storage','--screenshot','output/smoke/storage.png')
     Invoke-SmokeApp '.\dist\ReedRelay-Player\ReedRelay-Player.exe' @('--demo','--page','audition','--screenshot','output/smoke/audition.png')
     Invoke-SmokeApp '.\dist\ReedRelay-Player\ReedRelay-Player.exe' @('--page','settings','--binding-demo','--screenshot','output/smoke/binding.png')
     Invoke-SmokeApp '.\dist\ReedRelay-Converter\ReedRelay-Converter.exe' @('--transcribe','output/smoke/calibration.wav','--output','output/smoke/score.json')
@@ -34,7 +37,13 @@ try {
     Invoke-SmokeApp '.\dist\ReedRelay-Converter\ReedRelay-Converter.exe' @('--demo','--page','audition','--audition-demo','--screenshot','output/smoke/converter-transport.png')
     Invoke-SmokeApp '.\dist\ReedRelay-Player\ReedRelay-Player.exe' @('--render-audition','output/smoke/score.json','--output','output/smoke/player-harmonica.wav','--audition-speed','1.25')
     Invoke-SmokeApp '.\dist\ReedRelay-Converter\ReedRelay-Converter.exe' @('--render-audition','output/smoke/score.json','--output','output/smoke/converter-harmonica.wav','--audition-mode','game')
-    foreach ($path in @('player.png','settings.png','audition.png','binding.png','converter.png','converter-audition.png','player-transport.png','converter-transport.png')) {
+    Invoke-SmokeApp '.\dist\ReedRelay-Player\ReedRelay-Player.exe' @('--repair-score','output/smoke/fragmented.json','--output','output/smoke/player-repaired.json')
+    Invoke-SmokeApp '.\dist\ReedRelay-Converter\ReedRelay-Converter.exe' @('--repair-score','output/smoke/fragmented.json','--output','output/smoke/converter-repaired.json')
+    foreach ($repairedPath in @('player-repaired.json','converter-repaired.json')) {
+        $repaired = Get-Content (Join-Path 'output\smoke' $repairedPath) -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($repaired.notes.Count -ne 2 -or $repaired.original_notes.Count -ne 3 -or $repaired.duration_ms -ne 6600 -or $repaired.notes[1].start_ms -ne 225) { throw "Invalid fragment repair: $repairedPath" }
+    }
+    foreach ($path in @('player.png','settings.png','storage.png','audition.png','binding.png','converter.png','converter-audition.png','player-transport.png','converter-transport.png')) {
         if ((Get-Item (Join-Path 'output\smoke' $path)).Length -lt 10000) { throw "Invalid screenshot: $path" }
     }
     & '.\.venv\Scripts\python.exe' -c "import wave,numpy as np; from pathlib import Path; files=[Path('output/smoke/player-harmonica.wav'),Path('output/smoke/converter-harmonica.wav')]; [None for p in files if p.stat().st_size>10000]; readers=[wave.open(str(p)) for p in files]; lengths=[r.getnframes()/r.getframerate() for r in readers]; samples=[np.frombuffer(r.readframes(r.getnframes()),dtype='<i2') for r in readers]; assert abs(lengths[0]*1.25-lengths[1])<.01; assert all(np.max(np.abs(x.astype(float)))>100 for x in samples); [r.close() for r in readers]; print('Frozen audition WAVs: valid duration and non-silent samples')"

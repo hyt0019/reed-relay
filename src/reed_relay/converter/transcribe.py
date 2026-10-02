@@ -88,8 +88,13 @@ def main():
     parser.add_argument("audio")
     parser.add_argument("output")
     parser.add_argument("--all-notes", action="store_true")
+    parser.add_argument("--short-note-ms", type=float, default=80.)
+    parser.add_argument("--gap-ms", type=float, default=50.)
+    parser.add_argument("--merge-repeats", action="store_true")
     args = parser.parse_args()
-    score = transcribe(args.audio, melody=not args.all_notes, progress=lambda p,s,_: print(f"{p:.0%} {s}", flush=True))
+    score = transcribe(args.audio, melody=not args.all_notes, minimum_ms=args.short_note_ms,
+                       gap_ms=args.gap_ms, merge_repeats=args.merge_repeats,
+                       progress=lambda p,s,_: print(f"{p:.0%} {s}", flush=True))
     score.save(args.output)
     print(f"Saved {len(score.notes)} notes; duration {score.duration_ms/1000:.2f}s")
 

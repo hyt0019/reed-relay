@@ -16,9 +16,9 @@ ApplicationWindow {
     palette.highlight: "#2362ba"
     palette.text: "#17343b"
     palette.buttonText: "#17343b"
-    property string page: ["settings","audition"].indexOf(initialPage)>=0 ? initialPage : "main"
+    property string page: ["settings","audition","storage"].indexOf(initialPage)>=0 ? initialPage : "main"
     property var binding: bridge.bindingController
-    property bool pagesReady: mainLoader.status===Loader.Ready && auditionLoader.status===Loader.Ready && settingsLoader.status===Loader.Ready
+    property bool pagesReady: mainLoader.status===Loader.Ready && auditionLoader.status===Loader.Ready && settingsLoader.status===Loader.Ready && storageLoader.status===Loader.Ready
     function reloadDraft() { if(settingsLoader.item)settingsLoader.item.reload() }
     function profileDraft() { return settingsLoader.item ? settingsLoader.item.profileDraft() : bridge.profile }
     function noteName(n) { return ["C","C♯","D","D♯","E","F","F♯","G","G♯","A","A♯","B"][((n%12)+12)%12] + (Math.floor(n/12)-1) }
@@ -88,15 +88,17 @@ ApplicationWindow {
                 ActionButton { text: bridge.appMode === "player" ? "演奏" : "听谱"; primary: root.page === "main"; implicitWidth: 63; implicitHeight: 57; onClicked: root.page="main" }
                 ActionButton { text: "试听"; primary: root.page === "audition"; implicitWidth: 63; implicitHeight: 57; onClicked: root.page="audition" }
                 ActionButton { text: "按键"; primary: root.page === "settings"; implicitWidth: 63; implicitHeight: 57; onClicked: { root.reloadDraft(); root.page="settings" } }
+                ActionButton { text: "存储"; primary: root.page === "storage"; implicitWidth: 63; implicitHeight: 57; onClicked: root.page="storage" }
             }
-            Label { anchors.bottom: parent.bottom; anchors.bottomMargin: 26; anchors.horizontalCenter: parent.horizontalCenter; text: "0.2.0"; color: "#78918e"; font.pixelSize: 12 }
+            Label { anchors.bottom: parent.bottom; anchors.bottomMargin: 26; anchors.horizontalCenter: parent.horizontalCenter; text: "0.2.1"; color: "#78918e"; font.pixelSize: 12 }
         }
         StackLayout {
             Layout.fillWidth:true;Layout.fillHeight:true
-            currentIndex:root.page==="settings"?2:root.page==="audition"?1:0
+            currentIndex:root.page==="storage"?3:root.page==="settings"?2:root.page==="audition"?1:0
             Loader { id:mainLoader;sourceComponent:bridge.appMode==="player"?playerPage:converterPage }
             Loader { id:auditionLoader;source:"Audition.qml" }
             Loader { id:settingsLoader;source:"Settings.qml" }
+            Loader { id:storageLoader;source:"Storage.qml" }
         }
     }
     Component {

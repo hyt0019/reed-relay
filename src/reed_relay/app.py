@@ -9,7 +9,7 @@ from PySide6.QtGui import QFont, QFontDatabase
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtQuick import QQuickWindow
 from PySide6.QtQuickControls2 import QQuickStyle
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QFileDialog
 from .backend import Backend
 
 
@@ -23,12 +23,27 @@ def run(mode):
     parser.add_argument("--no-hotkeys", action="store_true")
     parser.add_argument("--score")
     parser.add_argument("--transcribe")
+    parser.add_argument("--repair-score", help="修整已有曲谱碎音并另存，需 --output")
+    parser.add_argument("--short-note-ms", type=float, default=80.)
+    parser.add_argument("--gap-ms", type=float, default=50.)
+    parser.add_argument("--merge-repeats", action="store_true")
     parser.add_argument("--check-loopback", action="store_true", help="播放短参考音并验证电脑声音采集，需 --output")
     parser.add_argument("--output")
     parser.add_argument("--render-audition", help="从曲谱渲染口琴 WAV，不启动界面")
     parser.add_argument("--audition-mode", choices=["clean","game"], default="clean")
     parser.add_argument("--audition-speed", type=float, default=1.)
     args = parser.parse_args()
+    repair_options = {'minimum_ms':args.short_note_ms,'gap_ms':args.gap_ms,'merge_repeats':args.merge_repeats}
+    if args.repair_score:
+        if not args.output: parser.error("--repair-score 需要 --output")
+        from .core.score import Score
+        from .core.melody import repair_melody
+        score = Score.load(args.repair_score)
+        if not score.original_notes: score.original_notes = list(score.notes)
+        score.notes = repair_melody(score.notes, **repair_options)
+        if not score.notes: raise ValueError('修整后没有音符，请降低 --short-note-ms')
+        score.save(args.output)
+        return 0
     if args.render_audition:
         if not args.output: parser.error("--render-audition 需要 --output")
         from .core.score import Score
@@ -51,7 +66,7 @@ def run(mode):
             parser.error("--transcribe 需要听谱入口和 --output 输出路径")
         try:
             from .converter.transcribe import transcribe
-            transcribe(args.transcribe).save(args.output)
+            transcribe(args.transcribe, **repair_options).save(args.output)
             return 0
         except Exception as e:
             error_path = Path(str(args.output)+".error.txt")
@@ -69,6 +84,12 @@ def run(mode):
         families = QFontDatabase.applicationFontFamilies(font_id)
         if families: font_family = families[0]
     app.setFont(QFont(font_family, 10))
+    from .storage import Storage, application_root
+    task_root = application_root()
+    if not args.screenshot and not os.environ.get('REED_RELAY_DATA_DIR') and not (task_root/'storage-location.json').exists() and task_root.drive.upper() == 'C:':
+        path = QFileDialog.getExistingDirectory(None, '选择数据保存目录（程序位于 C 盘，请先选择作品保存位置）', str(task_root))
+        if not path: return 0
+        Storage(initial_directory=Path(path))
     backend = Backend(mode, no_hotkeys=args.no_hotkeys or bool(args.screenshot))
     if args.demo: backend.loadDemo()
     if args.score: backend.loadProjectPath(args.score)

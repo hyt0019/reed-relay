@@ -11,3 +11,7 @@
 `examples/晨风.reedscore.json` 是项目自制短旋律，供独立启动与预演使用。本地样例 MP3 及其派生内容不提交仓库。
 
 演奏偏好中的 `long_policy` 为 `hold` 或 `rearticulate`，`repeat_gap` 为实际毫秒。同音间隔和长音分段仅改变临时演奏计划，不覆盖曲谱；变化后的事件起点仍按源时间轴调度。试听渲染速度只缩放时间，不改变频率。
+
+`repair_minimum` / `repair_gap` 为碎音过滤与小间隙衔接的毫秒阈值（默认 80 / 50），`repair_merge` 控制相邻同音合并（默认 false）。主旋律转换采用这些参数；`metadata.melody_repair` 记录转换使用值。手动修整改变当前 `notes` 并可撤销，`original_notes` 保留完整候选；将阈值设为 0 可保留快速音符和真实小休止。
+
+程序旁 `storage-location.json` 的 `directory` 保存数据目录绝对路径；该文件和用户数据不提交 Git。切换目录复制持久文件并重写目录内绝对路径，不覆盖有不同内容的目标文件，不搬走或删除原目录。

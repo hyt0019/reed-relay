@@ -3,9 +3,17 @@ from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
+import re
 import sys
 import tempfile
 from .core.score import atomic_json
+
+
+def suggested_file(directory, title, suffix):
+    name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', title).strip(' .')[:120] or '曲谱'
+    if name.split('.')[0].upper() in {'CON', 'PRN', 'AUX', 'NUL'} | {f'{prefix}{n}' for prefix in ('COM', 'LPT') for n in range(1, 10)}:
+        name = '_'+name
+    return str(Path(directory)/(name+suffix))
 
 
 def application_root():
@@ -112,6 +120,7 @@ def rollback(paths, target):
 class Storage:
     root: Path | None = None
     legacy: Path | None = None
+    initial_directory: Path | None = None
 
     def __post_init__(self):
         self.root = Path(self.root or application_root()).resolve()
@@ -126,7 +135,7 @@ class Storage:
             raw = json.loads(self.locator.read_text(encoding='utf-8-sig'))
             self.directory = ensure_writable(raw['directory'])
             return
-        self.directory = ensure_writable(self.root/'local-data')
+        self.directory = ensure_writable(self.initial_directory or self.root/'local-data')
         created = []
         try:
             if self.legacy != self.directory and self.legacy.is_dir():
@@ -135,6 +144,10 @@ class Storage:
             atomic_json(self.locator, {'directory':str(self.directory)})
         except Exception as error:
             rollback(created, self.directory)
+            if self.initial_directory is not None:
+                # A first-launch choice must never fall back to the C drive
+                # when recording that choice fails.
+                raise
             self.notice = f'使用程序旁的数据目录；旧数据迁移或位置记录失败：{error}'
 
     def choose(self, target, snapshots=None):
