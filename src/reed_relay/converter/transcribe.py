@@ -1,15 +1,15 @@
 from __future__ import annotations
 
-from dataclasses import replace
 from pathlib import Path
 import threading
 import numpy as np
-from reed_relay.core.score import Note, Score, extract_melody
-from reed_relay.core.melody import repair_melody
+from reed_relay.core.score import Note, Score
+from reed_relay.core.melody import repair_melody, select_melody
 from .audio import decode, waveform_peaks, check_cancel
 
 
-def transcribe(path, melody=True, cancel=None, progress=lambda *args: None, *, minimum_ms=80., gap_ms=50., merge_repeats=False):
+def transcribe(path, melody=True, cancel=None, progress=lambda *args: None, *, minimum_ms=80., gap_ms=50., merge_repeats=False,
+               minimum_pitch=0, maximum_pitch=127):
     cancel = cancel or threading.Event()
     path = Path(path)
     progress(.01, "正在解码音频", None)
@@ -49,20 +49,23 @@ def transcribe(path, melody=True, cancel=None, progress=lambda *args: None, *, m
         start_ms = max(0., float(times[start])*1000)
         end_ms = min(duration_ms, float(times[min(end, len(times)-1)])*1000)
         if end_ms <= start_ms: continue
-        cents = float(np.median(bend)*100/3) if bend else 0.
         note = Note(round(start_ms, 3), round(end_ms-start_ms, 3), int(pitch),
                     max(1, min(127, round(float(activation)*127))),
-                    max(0., min(1., float(activation))), cents=max(-1200, min(1200, cents)))
+                    max(0., min(1., float(activation))))
         notes.append(note)
         if bend: bends[note.id] = [int(v) for v in bend]
     notes.sort(key=lambda n: (n.start_ms, n.midi_pitch))
     progress(.95, "生成可校对曲谱", None)
-    draft = repair_melody(extract_melody(notes), minimum_ms, gap_ms, merge_repeats) if melody else list(notes)
+    draft = repair_melody(select_melody(notes, minimum_pitch=minimum_pitch, maximum_pitch=maximum_pitch),
+                          minimum_ms, gap_ms, merge_repeats) if melody else list(notes)
     score = Score(path.stem, draft, duration_ms,
                   source_file=str(path.resolve()), original_notes=list(notes),
                   metadata={"engine": "Spotify Basic Pitch 0.4.0 / ONNX", "mode": "melody" if melody else "all-notes",
                             "waveform": waveform_peaks(audio),
                             "bpm_estimated": False, "confidence_kind": "model activation, not calibrated probability",
+                            "pitch_policy": "midi-semitones; uncalibrated contour retained only as metadata",
+                            "melody_selection": {"algorithm":"register-path-v2", "minimum_pitch":minimum_pitch,
+                                                 "maximum_pitch":maximum_pitch} if melody else None,
                             "melody_repair": {"minimum_ms":minimum_ms,"gap_ms":gap_ms,"merge_repeats":merge_repeats} if melody else None,
                             "pitch_bends_third_semitone": bends,
                             "notice": "原始候选完整保留；主旋律为可编辑的自动简化，混音歌曲需要试听校对。"})
@@ -91,9 +94,12 @@ def main():
     parser.add_argument("--short-note-ms", type=float, default=80.)
     parser.add_argument("--gap-ms", type=float, default=50.)
     parser.add_argument("--merge-repeats", action="store_true")
+    parser.add_argument("--minimum-pitch", type=int, default=0)
+    parser.add_argument("--maximum-pitch", type=int, default=127)
     args = parser.parse_args()
     score = transcribe(args.audio, melody=not args.all_notes, minimum_ms=args.short_note_ms,
                        gap_ms=args.gap_ms, merge_repeats=args.merge_repeats,
+                       minimum_pitch=args.minimum_pitch, maximum_pitch=args.maximum_pitch,
                        progress=lambda p,s,_: print(f"{p:.0%} {s}", flush=True))
     score.save(args.output)
     print(f"Saved {len(score.notes)} notes; duration {score.duration_ms/1000:.2f}s")

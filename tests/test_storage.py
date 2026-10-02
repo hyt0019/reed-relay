@@ -29,7 +29,7 @@ def test_portable_default_migrates_legacy_and_preserves_originals(locations):
     assert storage.directory == root/'local-data'
     copied = storage.directory/'conversions/song.json'
     assert Score.load(copied).title == 'saved' and project.exists()
-    assert json.loads((storage.directory/'playlist.json').read_text()) == [str(copied)]
+    assert json.loads((storage.directory/'playlist.json').read_text(encoding='utf-8')) == [str(copied)]
     assert not (storage.directory/'harmonica_old.wav').exists()
     assert Storage().directory == storage.directory
 

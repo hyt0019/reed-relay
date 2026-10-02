@@ -44,6 +44,8 @@ def test_real_model_known_pitches_and_late_timing(tmp_path):
     synthesize(score,path)
     result=transcribe(path,melody=False)
     assert result.original_notes
+    assert all(n.cents == 0 for n in result.notes)
+    assert result.metadata['pitch_bends_third_semitone']
     for expected in score.notes:
         candidates=[n for n in result.notes if n.midi_pitch==expected.midi_pitch]
         assert candidates, f"Missing pitch {expected.midi_pitch}"
@@ -53,3 +55,19 @@ def test_real_model_known_pitches_and_late_timing(tmp_path):
     saved=tmp_path / "known.reedscore.json"
     result.save(saved)
     assert Score.load(saved).original_notes==result.original_notes
+
+
+def test_real_model_mixture_selects_melody_instead_of_stronger_bass(tmp_path):
+    pytest.importorskip('basic_pitch')
+    melody = [Note(300+i*450, 420, p, velocity=110) for i, p in enumerate([67,69,71,72,71,69,67,64])]
+    bass = [Note(300+i*900, 890, 36+i%3, velocity=127) for i in range(4)]
+    path = tmp_path/'mixture.wav'
+    synthesize(Score('Known mixture', melody+bass, 4200), path)
+    result = transcribe(path)
+    assert any(n.midi_pitch < 48 for n in result.original_notes)
+    # The model can miss tones; the selector must not fill these with bass.
+    matches = sum(any(n.midi_pitch == m.midi_pitch and n.start_ms <= m.start_ms+200 < n.end_ms
+                      for n in result.notes) for m in melody)
+    assert matches >= 6
+    assert all(n.midi_pitch in {m.midi_pitch for m in melody} for n in result.notes)
+    assert all(n.cents == 0 for n in result.notes)
