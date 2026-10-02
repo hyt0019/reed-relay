@@ -115,6 +115,17 @@ def test_pages_load_and_launch_click_does_not_bind_left_mouse(rig,mode):
     assert not b.binding.active and b._profile.keys[0]=='J'
     root.setProperty('page','audition');app.processEvents()
     assert root.property('pagesReady') and not warnings
+    original = list(b._score.original_notes or b._score.notes)
+    b.configureMelody(60, 64);app.processEvents()
+    minimum = next(item for item in visual_items(root.contentItem()) if item.objectName()=='melodyMinimum' and item.isVisible())
+    assert minimum.property('value') == 60
+    extract = next(item for item in visual_items(root.contentItem()) if item.objectName()=='melodyExtract' and item.isVisible())
+    QTest.mouseClick(root,Qt.MouseButton.LeftButton,Qt.KeyboardModifier.NoModifier,extract.mapToScene(extract.boundingRect().center()).toPoint())
+    app.processEvents()
+    assert b._score.notes and all(60 <= n.midi_pitch <= 64 for n in b._score.notes)
+    assert b._score.original_notes == original and b.canUndo
+    b.configureMelody(0,127);app.processEvents()
+    assert minimum.property('value') == 0
     if mode == 'converter':
         root.setProperty('page','main');app.processEvents()
         preview=next(item for item in visual_items(root.contentItem()) if item.objectName()=='converterAudition')

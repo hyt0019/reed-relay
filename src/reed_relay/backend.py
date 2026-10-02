@@ -23,7 +23,7 @@ from reed_relay.player.windows import Hotkeys, WindowsOutput, windows, focus_gua
 from reed_relay.audition import Audition
 from reed_relay.binding import BindingCapture
 from reed_relay.storage import Storage, rewrite_paths, suggested_file
-from reed_relay.core.melody import repair_melody
+from reed_relay.core.melody import repair_melody, select_melody, model_semitone_notes
 
 
 class Backend(QObject):
@@ -66,6 +66,8 @@ class Backend(QObject):
         self._repair_minimum = self._initial_options.get('repair_minimum', 80.)
         self._repair_gap = self._initial_options.get('repair_gap', 50.)
         self._repair_merge = self._initial_options.get('repair_merge', False)
+        self._melody_minimum = self._initial_options.get('melody_minimum', 0)
+        self._melody_maximum = self._initial_options.get('melody_maximum', 127)
         self._tune, self._stream, self._mic_queue = {}, None, queue.Queue(maxsize=2)
         self._capture_source, self._capture_devices, self._capture_device = "system", [], -1
         self._loopback, self._capture_level, self._last_audio_time = None, 0., 0.
@@ -217,6 +219,9 @@ class Backend(QObject):
     @Property('QVariantMap', notify=changed)
     def repairDefaults(self):
         return {'minimum':self._repair_minimum,'gap':self._repair_gap,'merge':self._repair_merge}
+    @Property('QVariantMap', notify=changed)
+    def melodyDefaults(self):
+        return {'minimum':self._melody_minimum,'maximum':self._melody_maximum}
     @Property("QVariantList", notify=scoreChanged)
     def voices(self): return sorted({n.voice for n in self._score.notes})
 
@@ -285,11 +290,21 @@ class Backend(QObject):
             self._edited()
         except Exception as error: self._error(error)
 
+    @Slot(int, int)
+    def configureMelody(self, minimum, maximum):
+        if self._busy or not 0 <= minimum <= maximum <= 127: return
+        self._melody_minimum, self._melody_maximum = minimum, maximum
+        try: self._save_preferences()
+        except OSError as error: self._error(error)
+        self.changed.emit()
+
     def _prepared_score(self):
         return replace(self._score, notes=self._reduce(self._score.notes)) if self._melody else self._score
 
     def _reduce(self, notes):
-        return repair_melody(extract_melody(notes), self._repair_minimum, self._repair_gap, self._repair_merge)
+        notes = model_semitone_notes(notes, self._score.metadata)
+        return repair_melody(select_melody(notes, minimum_pitch=self._melody_minimum, maximum_pitch=self._melody_maximum),
+                             self._repair_minimum, self._repair_gap, self._repair_merge)
 
     def _check(self):
         try:
@@ -475,7 +490,8 @@ class Backend(QObject):
         return {"speed":round(self._speed*100),"delay":self._delay,
                     "transpose":self._transpose,"melody":self._melody,"skip":self._skip,
                     "auto_continue":self._auto_continue,"long_policy":self._long_policy,"repeat_gap":self._repeat_gap,
-                    'repair_minimum':self._repair_minimum,'repair_gap':self._repair_gap,'repair_merge':self._repair_merge}
+                    'repair_minimum':self._repair_minimum,'repair_gap':self._repair_gap,'repair_merge':self._repair_merge,
+                    'melody_minimum':self._melody_minimum,'melody_maximum':self._melody_maximum}
 
     @Slot(str, float)
     def configureArticulation(self, policy, gap):
@@ -861,6 +877,7 @@ class Backend(QObject):
         self._conversion_cancel.clear()
         paths = list(self._audio_queue)
         repair_options = {'minimum_ms':self._repair_minimum,'gap_ms':self._repair_gap,'merge_repeats':self._repair_merge}
+        repair_options.update(minimum_pitch=self._melody_minimum, maximum_pitch=self._melody_maximum)
         def worker():
             try:
                 from .converter.transcribe import transcribe
@@ -1018,14 +1035,19 @@ class Backend(QObject):
 
     @Slot(bool)
     def changeReduction(self, melody):
-        if self._busy: return
-        self._remember()
-        if not self._score.original_notes: self._score.original_notes=list(self._score.notes)
-        source = self._score.original_notes
-        self.stop(); self.stopAudio()
-        self._score.notes = self._reduce(source) if melody else list(source)
-        self._selected_note=-1
-        self._edited()
+        if self._busy or self.binding.active: return
+        try:
+            source = self._score.original_notes or self._score.notes
+            selected = self._reduce(source) if melody else list(source)
+            if not selected: raise ValueError('当前音域和碎音阈值下没有旋律候选；请扩大音域或降低碎音阈值')
+            self.stop(); self.stopAudio()
+            self._remember()
+            if not self._score.original_notes: self._score.original_notes = list(source)
+            self._score.notes, self._selected_note = selected, -1
+            self._message = (f'已重新提取：{len(source)} 个候选 → {len(selected)} 个旋律音；保持原调，可撤销'
+                             if melody else f'已恢复 {len(source)} 个完整候选，可撤销')
+            self._edited()
+        except Exception as error: self._error(error)
 
     @Slot(str)
     def selectVoice(self, voice):

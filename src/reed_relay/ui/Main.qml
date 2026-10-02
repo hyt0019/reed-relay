@@ -90,7 +90,7 @@ ApplicationWindow {
                 ActionButton { text: "按键"; primary: root.page === "settings"; implicitWidth: 63; implicitHeight: 57; onClicked: { root.reloadDraft(); root.page="settings" } }
                 ActionButton { text: "存储"; primary: root.page === "storage"; implicitWidth: 63; implicitHeight: 57; onClicked: root.page="storage" }
             }
-            Label { anchors.bottom: parent.bottom; anchors.bottomMargin: 26; anchors.horizontalCenter: parent.horizontalCenter; text: "0.2.1"; color: "#78918e"; font.pixelSize: 12 }
+            Label { anchors.bottom: parent.bottom; anchors.bottomMargin: 26; anchors.horizontalCenter: parent.horizontalCenter; text: "0.2.2"; color: "#78918e"; font.pixelSize: 12 }
         }
         StackLayout {
             Layout.fillWidth:true;Layout.fillHeight:true

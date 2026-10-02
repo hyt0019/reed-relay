@@ -84,3 +84,40 @@ def test_missing_next_song_stops_without_restarting_previous(tmp_path, monkeypat
     assert not backend.engine.running
     assert not restarted
     backend.close()
+
+
+def test_melody_range_reextract_legacy_tuning_undo_and_empty_guard(tmp_path, monkeypatch):
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setenv('REED_RELAY_DATA_DIR', str(tmp_path))
+    backend = Backend('converter', no_hotkeys=True)
+    bass = Note(0, 800, 36, confidence=.9)
+    melody = [Note(0, 400, 60, cents=100/3), Note(400, 400, 62, cents=13)]
+    original = [bass, *melody]
+    metadata = {'engine':'Spotify Basic Pitch 0.4.0 / ONNX',
+                'pitch_bends_third_semitone':{n.id:[1,1,1] for n in melody}}
+    path = tmp_path/'legacy.json'
+    Score('Legacy', [bass], 800, original_notes=original, metadata=metadata).save(path)
+    backend.loadProjectPath(str(path))
+    backend.configureMelody(60, 72)
+    assert backend._score.notes == [bass]
+    backend.changeReduction(True)
+    selected = list(backend._score.notes)
+    assert [n.midi_pitch for n in selected] == [60, 62]
+    assert [n.cents for n in selected] == [0, 13]
+    assert backend._score.original_notes == original
+    assert Score.load(tmp_path/'autosave.reedscore.json').notes == selected
+    backend.undo()
+    assert backend._score.notes == [bass]
+    backend.redo()
+    assert backend._score.notes == selected
+    backend.configureMelody(90, 100)
+    undo_count = len(backend._undo)
+    backend.changeReduction(True)
+    assert backend._score.notes == selected and len(backend._undo) == undo_count
+    assert '没有旋律候选' in backend.message
+    backend.configureMelody(72, 60)
+    assert backend.melodyDefaults == {'minimum':90, 'maximum':100}
+    backend.close()
+    second = Backend('player', no_hotkeys=True)
+    assert second.melodyDefaults == {'minimum':90, 'maximum':100}
+    second.close()

@@ -1,6 +1,27 @@
 """Temporal melody selection and explicit, reversible fragment repair."""
 from dataclasses import replace
+from statistics import median
 from .score import Note, number
+
+
+def model_semitone_notes(notes: list[Note], metadata: dict) -> list[Note]:
+    """Remove only recorded Basic Pitch contour offsets in legacy drafts.
+
+    Raw candidates are left intact. MIDI/manual tuning and new semitone
+    scores are not migrated. An edited offset that differs from the recorded
+    contour is also preserved.
+    """
+    if not metadata.get('engine', '').startswith('Spotify Basic Pitch') or metadata.get('pitch_policy'):
+        return list(notes)
+    bends = metadata.get('pitch_bends_third_semitone', {})
+    result = []
+    for note in notes:
+        origin = note.id.split(':melody:', 1)[0]
+        trajectory = bends.get(origin)
+        if trajectory and abs(note.cents-median(trajectory)*100/3) < .001:
+            note = replace(note, cents=0.)
+        result.append(note)
+    return result
 
 
 def select_melody(notes: list[Note], *, minimum_pitch=0, maximum_pitch=127) -> list[Note]:

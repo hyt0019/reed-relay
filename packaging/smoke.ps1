@@ -6,6 +6,8 @@ New-Item -ItemType Directory -Force 'output\smoke' | Out-Null
 if ($LASTEXITCODE -ne 0) { throw 'Could not create the original calibration audio.' }
 & '.\.venv\Scripts\python.exe' -c "from reed_relay.core.score import Score,Note; ns=[Note(0,200,60),Note(200,12,84),Note(225,200,62)]; Score('Repair test',ns,6600,original_notes=ns).save('output/smoke/fragmented.json')"
 if ($LASTEXITCODE -ne 0) { throw 'Could not create fragment test score.' }
+& '.\.venv\Scripts\python.exe' -c "from reed_relay.core.score import Score,Note; ns=[Note(0,800,36),Note(0,400,60,cents=100/3),Note(400,400,62)]; meta={'engine':'Spotify Basic Pitch 0.4.0 / ONNX','pitch_bends_third_semitone':{ns[1].id:[1,1]}}; Score('Melody test',[ns[0]],800,original_notes=ns,metadata=meta).save('output/smoke/melody.json')"
+if ($LASTEXITCODE -ne 0) { throw 'Could not create melody test score.' }
 $savedEnvironment = @{}
 foreach ($key in @('QT_QPA_PLATFORM','QT_QUICK_BACKEND','REED_RELAY_DATA_DIR','PYTHONPATH')) {
     $savedEnvironment[$key] = [Environment]::GetEnvironmentVariable($key, 'Process')
@@ -39,6 +41,12 @@ try {
     Invoke-SmokeApp '.\dist\ReedRelay-Converter\ReedRelay-Converter.exe' @('--render-audition','output/smoke/score.json','--output','output/smoke/converter-harmonica.wav','--audition-mode','game')
     Invoke-SmokeApp '.\dist\ReedRelay-Player\ReedRelay-Player.exe' @('--repair-score','output/smoke/fragmented.json','--output','output/smoke/player-repaired.json')
     Invoke-SmokeApp '.\dist\ReedRelay-Converter\ReedRelay-Converter.exe' @('--repair-score','output/smoke/fragmented.json','--output','output/smoke/converter-repaired.json')
+    Invoke-SmokeApp '.\dist\ReedRelay-Player\ReedRelay-Player.exe' @('--extract-score','output/smoke/melody.json','--minimum-pitch','60','--maximum-pitch','72','--output','output/smoke/player-melody.json')
+    Invoke-SmokeApp '.\dist\ReedRelay-Converter\ReedRelay-Converter.exe' @('--extract-score','output/smoke/melody.json','--minimum-pitch','60','--maximum-pitch','72','--output','output/smoke/converter-melody.json')
+    foreach ($melodyPath in @('player-melody.json','converter-melody.json')) {
+        $melody = Get-Content (Join-Path 'output\smoke' $melodyPath) -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($melody.notes.Count -ne 2 -or $melody.notes[0].midi_pitch -ne 60 -or $melody.notes[1].midi_pitch -ne 62 -or $melody.notes[0].cents -ne 0 -or $melody.original_notes.Count -ne 3 -or $melody.original_notes[1].cents -lt 33 -or $melody.duration_ms -ne 800) { throw "Invalid melody extraction: $melodyPath" }
+    }
     foreach ($repairedPath in @('player-repaired.json','converter-repaired.json')) {
         $repaired = Get-Content (Join-Path 'output\smoke' $repairedPath) -Raw -Encoding UTF8 | ConvertFrom-Json
         if ($repaired.notes.Count -ne 2 -or $repaired.original_notes.Count -ne 3 -or $repaired.duration_ms -ne 6600 -or $repaired.notes[1].start_ms -ne 225) { throw "Invalid fragment repair: $repairedPath" }

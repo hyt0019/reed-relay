@@ -24,6 +24,9 @@ def run(mode):
     parser.add_argument("--score")
     parser.add_argument("--transcribe")
     parser.add_argument("--repair-score", help="修整已有曲谱碎音并另存，需 --output")
+    parser.add_argument("--extract-score", help="从曲谱完整候选重新提取主旋律，需 --output")
+    parser.add_argument("--minimum-pitch", type=int, default=0)
+    parser.add_argument("--maximum-pitch", type=int, default=127)
     parser.add_argument("--short-note-ms", type=float, default=80.)
     parser.add_argument("--gap-ms", type=float, default=50.)
     parser.add_argument("--merge-repeats", action="store_true")
@@ -34,6 +37,18 @@ def run(mode):
     parser.add_argument("--audition-speed", type=float, default=1.)
     args = parser.parse_args()
     repair_options = {'minimum_ms':args.short_note_ms,'gap_ms':args.gap_ms,'merge_repeats':args.merge_repeats}
+    melody_options = {'minimum_pitch':args.minimum_pitch, 'maximum_pitch':args.maximum_pitch}
+    if args.extract_score:
+        if not args.output: parser.error('--extract-score 需要 --output')
+        from .core.score import Score
+        from .core.melody import select_melody, repair_melody, model_semitone_notes
+        score = Score.load(args.extract_score)
+        if not score.original_notes: score.original_notes = list(score.notes)
+        candidates = model_semitone_notes(score.original_notes, score.metadata)
+        score.notes = repair_melody(select_melody(candidates, **melody_options), **repair_options)
+        if not score.notes: raise ValueError('当前音域和碎音阈值下没有旋律候选')
+        score.save(args.output)
+        return 0
     if args.repair_score:
         if not args.output: parser.error("--repair-score 需要 --output")
         from .core.score import Score
@@ -66,7 +81,7 @@ def run(mode):
             parser.error("--transcribe 需要听谱入口和 --output 输出路径")
         try:
             from .converter.transcribe import transcribe
-            transcribe(args.transcribe, **repair_options).save(args.output)
+            transcribe(args.transcribe, **repair_options, **melody_options).save(args.output)
             return 0
         except Exception as e:
             error_path = Path(str(args.output)+".error.txt")

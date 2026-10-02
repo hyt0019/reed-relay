@@ -18,7 +18,7 @@ ScrollView {
             ColumnLayout {
                 spacing: 5
                 Label { text: "把声音，写成可演奏的谱"; color: "#17343b"; font.pixelSize: 27; font.bold: true }
-                Muted { text: "保留原调。先识别，再用耳朵确认每一个音。" }
+                Muted { text: "保留原调。还原歌声旋律时，请使用含人声的原曲或 MIDI。" }
             }
             Item { Layout.fillWidth: true }
             ActionButton { text: "恢复自动保存"; enabled: !bridge.busy; onClicked: bridge.recoverProject() }
@@ -73,6 +73,7 @@ ScrollView {
                     Muted { text: "橙色为低模型分数，建议优先试听"; color: "#ad784d" }
                     ComboBox { id: zoom; model: ["12 秒视窗", "24 秒视窗", "48 秒视窗"]; implicitWidth: 125 }
                 }
+                MelodySelection { Layout.fillWidth:true }
                 MelodyTools { Layout.fillWidth:true }
                 PianoRoll { Layout.fillWidth: true; Layout.preferredHeight: 155; notes: bridge.notes; selected: bridge.selectedNote; startMs: viewStart.value; spanMs: 12000*Math.pow(2,zoom.currentIndex); onPicked: function(index) { bridge.selectNote(index) } }
                 Slider { id: viewStart; Layout.fillWidth: true; from: 0; to: Math.max(0,bridge.duration-12000*Math.pow(2,zoom.currentIndex)); stepSize: 200; value: 0 }
@@ -81,7 +82,6 @@ ScrollView {
                     Item { Layout.fillWidth: true }
                     ActionButton { text: "撤销"; enabled: bridge.canUndo && !bridge.busy; onClicked: bridge.undo() }
                     ActionButton { text: "重做"; enabled: bridge.canRedo && !bridge.busy; onClicked: bridge.redo() }
-                    ActionButton { text: "提取主旋律"; enabled: bridge.notes.length>0 && !bridge.busy; onClicked: bridge.changeReduction(true) }
                     ActionButton { text: "恢复原始候选"; enabled: bridge.notes.length>0 && !bridge.busy; onClicked: bridge.changeReduction(false) }
                 }
                 Rectangle {

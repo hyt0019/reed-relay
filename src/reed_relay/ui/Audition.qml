@@ -8,7 +8,7 @@ ScrollView {
     function clock(ms) { let s=Math.floor(ms/1000);return Math.floor(s/60).toString().padStart(2,"0")+":"+(s%60).toString().padStart(2,"0") }
     clip:true;contentWidth:availableWidth
     ColumnLayout {
-        width:page.availableWidth;spacing:20
+        width:page.availableWidth;spacing:16
         RowLayout {
             Layout.fillWidth:true;Layout.margins:26;Layout.bottomMargin:0
             ColumnLayout {
@@ -21,16 +21,16 @@ ScrollView {
             ActionButton { text:"打开曲谱 / MIDI";enabled:!bridge.busy;onClicked:bridge.openProject() }
         }
         Rectangle {
-            Layout.fillWidth:true;Layout.leftMargin:26;Layout.rightMargin:26;Layout.preferredHeight:190;radius:16;color:"#173c48"
+            Layout.fillWidth:true;Layout.leftMargin:26;Layout.rightMargin:26;Layout.preferredHeight:158;radius:16;color:"#173c48"
             ColumnLayout {
-                anchors.fill:parent;anchors.margins:24;spacing:12
+                anchors.fill:parent;anchors.margins:18;spacing:8
                 RowLayout {
                     Label { text:page.transport.status;color:"#c1d7d5";font.pixelSize:13 }
                     Item { Layout.fillWidth:true }
                     Label { text:page.transport.mode==="clean"?"旋律校对 · 保持原调":"游戏效果 · 含推算音色";color:"#e9bf97";font.pixelSize:12 }
                 }
                 Label { Layout.fillWidth:true;text:bridge.title;color:"#fcfdf9";font.pixelSize:29;font.bold:true;elide:Text.ElideRight }
-                Slider { id:seek;Layout.fillWidth:true;from:0;to:Math.max(1,bridge.duration);value:page.transport.position;enabled:!page.transport.busy && bridge.notes.length>0;onMoved:page.transport.seek(value) }
+                Slider { id:seek;Layout.fillWidth:true;Layout.preferredHeight:30;from:0;to:Math.max(1,bridge.duration);value:page.transport.position;enabled:!page.transport.busy && bridge.notes.length>0;onMoved:page.transport.seek(value) }
                 RowLayout {
                     Label { text:page.clock(page.transport.position);color:"#c1d7d5";font.pixelSize:13 }
                     Item { Layout.fillWidth:true }
@@ -53,17 +53,17 @@ ScrollView {
         Panel {
             Layout.fillWidth:true;Layout.leftMargin:26;Layout.rightMargin:26
             ColumnLayout {
-                anchors.fill:parent;spacing:13
+                anchors.fill:parent;spacing:9
                 RowLayout {
                     Label { text:"旋律时间轴";font.pixelSize:18;font.bold:true;color:"#17343b" }
                     Item { Layout.fillWidth:true }
                     Label { text:"点击音符可选中片段";font.pixelSize:12;color:"#647e82" }
-                    ActionButton { text:"重提主旋律";enabled:!bridge.busy && bridge.notes.length>0;onClicked:bridge.changeReduction(true) }
                     ActionButton { text:"循环选中音符";enabled:bridge.selectedNote>=0;onClicked:bridge.auditionSelected() }
                 }
+                MelodySelection { Layout.fillWidth:true }
                 MelodyTools { Layout.fillWidth:true }
                 Item {
-                    Layout.fillWidth:true;Layout.preferredHeight:145
+                    Layout.fillWidth:true;Layout.preferredHeight:125
                     PianoRoll { id:roll;anchors.fill:parent;notes:bridge.notes;selected:bridge.selectedNote;spanMs:12000;startMs:Math.floor(page.transport.position/12000)*12000;onPicked:function(index){bridge.selectNote(index)} }
                     Rectangle { x:44+((page.transport.position-roll.startMs)/roll.spanMs)*(parent.width-44);y:20;width:2;height:parent.height-20;color:"#d98b60" }
                 }

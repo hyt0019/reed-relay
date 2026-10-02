@@ -14,4 +14,6 @@
 
 `repair_minimum` / `repair_gap` 为碎音过滤与小间隙衔接的毫秒阈值（默认 80 / 50），`repair_merge` 控制相邻同音合并（默认 false）。主旋律转换采用这些参数；`metadata.melody_repair` 记录转换使用值。手动修整改变当前 `notes` 并可撤销，`original_notes` 保留完整候选；将阈值设为 0 可保留快速音符和真实小休止。
 
+`melody_minimum` / `melody_maximum` 保存旋律候选的 MIDI 音域（默认 0 / 127），不改音高；新转写的 `metadata.melody_selection` 记录 `register-path-v2` 与范围。完整候选不受范围影响。`metadata.pitch_policy` 说明新 Basic Pitch 候选按 MIDI 半音发声，`pitch_bends_third_semitone` 仅保留原始分析数据，不直接转成可信的 `Note.cents`。手工和其他来源的音分仍由 `Note.cents` 保存。
+
 程序旁 `storage-location.json` 的 `directory` 保存数据目录绝对路径；该文件和用户数据不提交 Git。切换目录复制持久文件并重写目录内绝对路径，不覆盖有不同内容的目标文件，不搬走或删除原目录。

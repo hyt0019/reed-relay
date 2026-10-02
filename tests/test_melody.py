@@ -1,7 +1,7 @@
 from dataclasses import replace
 import pytest
 from reed_relay.core.score import Note, Score, extract_melody
-from reed_relay.core.melody import repair_melody, select_melody
+from reed_relay.core.melody import repair_melody, select_melody, model_semitone_notes
 
 
 def test_temporal_path_ignores_brief_competitor_but_follows_sustained_change():
@@ -82,3 +82,15 @@ def test_range_filter_keeps_raw_candidates_and_fast_monophonic_attacks():
     assert not select_melody(notes, minimum_pitch=90)
     with pytest.raises(ValueError): select_melody(notes, minimum_pitch=72, maximum_pitch=60)
     with pytest.raises(ValueError): select_melody(notes, maximum_pitch=float('nan'))
+
+
+def test_legacy_contour_correction_preserves_manual_and_original_offsets():
+    legacy = Note(0, 200, 60, cents=100/3)
+    manual = Note(200, 200, 62, cents=13)
+    metadata = {'engine':'Spotify Basic Pitch 0.4.0 / ONNX',
+                'pitch_bends_third_semitone':{legacy.id:[1,1,1], manual.id:[1,1,1]}}
+    corrected = model_semitone_notes([legacy, manual], metadata)
+    assert corrected[0].cents == 0 and corrected[1] == manual
+    assert legacy.cents == 100/3
+    assert model_semitone_notes([legacy], {}) == [legacy]
+    assert model_semitone_notes([legacy], metadata|{'pitch_policy':'manual'}) == [legacy]
