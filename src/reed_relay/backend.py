@@ -22,6 +22,8 @@ from reed_relay.player.engine import PlayerEngine, PreviewOutput
 from reed_relay.player.windows import Hotkeys, WindowsOutput, windows, focus_guard, held_controls, window_alive, monitor_name
 from reed_relay.audition import Audition
 from reed_relay.binding import BindingCapture
+from reed_relay.storage import Storage, rewrite_paths
+from reed_relay.core.melody import repair_melody
 
 
 class Backend(QObject):
@@ -40,13 +42,13 @@ class Backend(QObject):
     def __init__(self, mode="player", no_hotkeys=False):
         super().__init__()
         self.mode = mode
-        self.data_dir = Path(os.environ.get("REED_RELAY_DATA_DIR", str(Path(os.environ.get("APPDATA", str(Path.home()))) / "ReedRelay")))
-        self.data_dir.mkdir(parents=True, exist_ok=True)
+        self.storage = Storage()
+        self.data_dir = self.storage.directory
         self._profile = Profile()
         self._score = Score("还没有添加曲谱")
         self._playlist, self._windows, self._issues, self._undo, self._redo = [], [], [], [], []
         self._selected = -1
-        self._message, self._state, self._hotkey_status = "添加曲谱后即可预演", "待机", ""
+        self._message, self._state, self._hotkey_status = self.storage.notice or "添加曲谱后即可预演", "待机", ""
         self._progress, self._active_pitch, self._active_key = 0., -1, ""
         self._preview, self._speed, self._delay, self._transpose = True, 1., 3., 0
         self._melody, self._skip, self._target = False, False, -1
@@ -203,12 +205,46 @@ class Backend(QObject):
     def selectedNote(self): return self._selected_note
     @Property(int, notify=changed)
     def queuedCount(self): return len(self._audio_queue)
+    @Property(str, notify=changed)
+    def storagePath(self): return str(self.data_dir)
+    @Property(str, constant=True)
+    def legacyStoragePath(self): return str(self.storage.legacy)
+    @Property(bool, constant=True)
+    def storageFixed(self): return self.storage.fixed
     @Property("QVariantList", notify=scoreChanged)
     def voices(self): return sorted({n.voice for n in self._score.notes})
 
     def _error(self, e):
         self._message = str(e)
         self.changed.emit()
+
+    @Slot()
+    def chooseStorage(self):
+        if self._busy or self.binding.active: return
+        path = QFileDialog.getExistingDirectory(None, '选择保存目录（已有数据将复制，原目录保留）', str(self.data_dir.parent))
+        if path: self.setStoragePath(path)
+
+    @Slot(str)
+    def setStoragePath(self, path):
+        if self._busy or self.binding.active:
+            self._error('请等待当前处理或绑定结束后再更改保存目录'); return
+        try:
+            self.stop(); self.stopAudio()
+            old = self.data_dir
+            snapshots = {'profile.json':self._profile.to_dict(),
+                         'playlist.json':[item['path'] for item in self._playlist],
+                         'preferences.json':self._preferences()}
+            if self._score.notes: snapshots['autosave.reedscore.json'] = asdict(self._score)
+            new = self.storage.choose(path, snapshots)
+            self.data_dir = new
+            self.audition.set_directory(new)
+            self._playlist = rewrite_paths(self._playlist, old, new)
+            self._score.source_file = rewrite_paths(self._score.source_file, old, new)
+            self._audio_path = rewrite_paths(self._audio_path, old, new)
+            self._audio_queue = rewrite_paths(self._audio_queue, old, new)
+            self.playlistChanged.emit()
+            self._error(f'保存目录已更改：{new}；已有数据已复制，原目录保留')
+        except Exception as error: self._error(f'保存目录未更改：{error}')
 
     def _prepared_score(self):
         return replace(self._score, notes=extract_melody(self._score.notes)) if self._melody else self._score
@@ -391,9 +427,12 @@ class Backend(QObject):
         self.changed.emit()
 
     def _save_preferences(self):
-        atomic_json(self.data_dir/"preferences.json",{"speed":round(self._speed*100),"delay":self._delay,
+        atomic_json(self.data_dir/"preferences.json",self._preferences())
+
+    def _preferences(self):
+        return {"speed":round(self._speed*100),"delay":self._delay,
                     "transpose":self._transpose,"melody":self._melody,"skip":self._skip,
-                    "auto_continue":self._auto_continue,"long_policy":self._long_policy,"repeat_gap":self._repeat_gap})
+                    "auto_continue":self._auto_continue,"long_policy":self._long_policy,"repeat_gap":self._repeat_gap}
 
     @Slot(str, float)
     def configureArticulation(self, policy, gap):
@@ -479,7 +518,7 @@ class Backend(QObject):
 
     @Slot()
     def exportProfile(self):
-        path, _ = QFileDialog.getSaveFileName(None, "导出场景", self._profile.name + ".profile.json", "场景 (*.json)")
+        path, _ = QFileDialog.getSaveFileName(None, "导出场景", str(self.data_dir/(self._profile.name + ".profile.json")), "场景 (*.json)")
         if path:
             try: self._profile.save(path); self._error("场景已导出")
             except Exception as e: self._error(e)
@@ -956,7 +995,7 @@ class Backend(QObject):
     def exportScore(self, kind):
         if self._busy or not self._score.notes: return
         suffix, filter_text = {"json": (".reedscore.json", "曲谱工程 (*.reedscore.json)"), "midi": (".mid", "MIDI (*.mid)"), "text": (".txt", "简谱 (*.txt)")}[kind]
-        path, _ = QFileDialog.getSaveFileName(None, "导出曲谱", self._score.title+suffix, filter_text)
+        path, _ = QFileDialog.getSaveFileName(None, "导出曲谱", str(self.data_dir/(self._score.title+suffix)), filter_text)
         if path:
             if not path.lower().endswith(suffix): path+=suffix
             try:

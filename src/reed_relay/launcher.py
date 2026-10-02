@@ -10,7 +10,8 @@ def launch(mode):
         from .app import run
         return run(mode)
     except Exception:
-        directory=Path(os.environ.get("REED_RELAY_DATA_DIR",str(Path(os.environ.get("APPDATA",str(Path.home())))/"ReedRelay")))
+        from .storage import application_root
+        directory=Path(os.environ.get("REED_RELAY_DATA_DIR",str(application_root()/"local-data")))
         directory.mkdir(parents=True,exist_ok=True)
         destination=directory/f"startup-{mode}.log"
         destination.write_text(traceback.format_exc(),encoding="utf-8")

@@ -97,6 +97,13 @@ class Audition(QObject):
         self._start, self._end, self._loop = 0., duration, False
         self.changed.emit()
 
+    def set_directory(self, directory):
+        self.stop()
+        self.player.setSource(QUrl())
+        self._loaded = False
+        self._signature = ''
+        self.directory = Path(directory)
+
     def play(self, score):
         if not score.notes: self.message.emit("先打开一份曲谱再试听"); return
         score = replace(score, notes=list(score.notes))

@@ -8,8 +8,8 @@ build/
 dist/
 output/
 local-data/
+storage-location.json
 样例文件/
 *.log
 *.tmp
 .env
-
