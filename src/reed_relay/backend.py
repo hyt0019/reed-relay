@@ -24,6 +24,7 @@ from reed_relay.audition import Audition
 from reed_relay.binding import BindingCapture
 from reed_relay.storage import Storage, rewrite_paths, suggested_file
 from reed_relay.core.melody import repair_melody, select_melody, model_semitone_notes
+from reed_relay.library import ScoreLibrary, default_library, read_score
 
 
 class Backend(QObject):
@@ -31,6 +32,7 @@ class Backend(QObject):
     scoreChanged = Signal()
     profileChanged = Signal()
     playlistChanged = Signal()
+    libraryChanged = Signal()
     issuesChanged = Signal()
     windowsChanged = Signal()
     selectionChanged = Signal()
@@ -68,6 +70,8 @@ class Backend(QObject):
         self._repair_merge = self._initial_options.get('repair_merge', False)
         self._melody_minimum = self._initial_options.get('melody_minimum', 0)
         self._melody_maximum = self._initial_options.get('melody_maximum', 127)
+        self.library = ScoreLibrary(self._initial_options.get('library_directory') or default_library(self.data_dir))
+        self._library_entries = []
         self._tune, self._stream, self._mic_queue = {}, None, queue.Queue(maxsize=2)
         self._capture_source, self._capture_devices, self._capture_device = "system", [], -1
         self._loopback, self._capture_level, self._last_audio_time = None, 0., 0.
@@ -130,6 +134,7 @@ class Backend(QObject):
             self._media.positionChanged.connect(self._media_position)
             self._media.mediaStatusChanged.connect(self._media_status)
             self._media.errorOccurred.connect(lambda *args: self._error("试听失败：" + self._media.errorString()))
+        self.refreshLibrary()
 
     @Property(str, constant=True)
     def appMode(self): return self.mode
@@ -161,6 +166,12 @@ class Backend(QObject):
     def profile(self): return self._profile.to_dict()
     @Property("QVariantList", notify=playlistChanged)
     def playlist(self): return self._playlist
+    @Property(str, notify=libraryChanged)
+    def libraryPath(self): return str(self.library.directory)
+    @Property('QVariantList', notify=libraryChanged)
+    def libraryEntries(self):
+        queued = {item['path'] for item in self._playlist}
+        return [entry | {'in_playlist':entry['path'] in queued} for entry in self._library_entries]
     @Property("QVariantList", notify=windowsChanged)
     def windowList(self): return self._windows
     @Property("QVariantList", notify=issuesChanged)
@@ -253,6 +264,8 @@ class Backend(QObject):
             self._score.source_file = rewrite_paths(self._score.source_file, old, new)
             self._audio_path = rewrite_paths(self._audio_path, old, new)
             self._audio_queue = rewrite_paths(self._audio_queue, old, new)
+            self.library = ScoreLibrary(rewrite_paths(str(self.library.directory), old, new))
+            self.refreshLibrary()
             self.playlistChanged.emit()
             self._error(f'保存目录已更改：{new}；已有数据已复制，原目录保留')
         except Exception as error: self._error(f'保存目录未更改：{error}')
@@ -398,25 +411,138 @@ class Backend(QObject):
         elif action == "next": self.stepSong(1)
 
     def _add_score(self, path):
-        score = Score.from_midi(path) if str(path).lower().endswith((".mid", ".midi")) else Score.load(path)
+        score = read_score(path)
         normalized = str(Path(path).resolve())
         if not any(item["path"] == normalized for item in self._playlist):
             self._playlist.append({"path": normalized, "title": score.title, "duration": score.duration_ms})
         self._score, self._selected = score, next(i for i, item in enumerate(self._playlist) if item["path"] == normalized)
+        self._playlist[self._selected].update(title=score.title, duration=score.duration_ms)
+        self._undo, self._redo, self._selected_note = [], [], -1
+        self.selectionChanged.emit()
         self._progress = 0
         self._check()
         self.scoreChanged.emit()
         self.playlistChanged.emit()
+        self.libraryChanged.emit()
 
     @Slot()
     def openScores(self):
-        paths, _ = QFileDialog.getOpenFileNames(None, "添加曲谱", "", "曲谱 (*.reedscore.json *.json *.mid *.midi)")
-        self.stop()
+        if self._busy or self.binding.active: return
+        paths, _ = QFileDialog.getOpenFileNames(None, '导入曲谱到演奏库', str(self.library.directory),
+                                               '曲谱 (*.mid *.midi *.reedscore.json *.json)')
+        if paths: self.importScoreFiles(json.dumps(paths))
+
+    @Slot()
+    def refreshLibrary(self):
+        try:
+            self._library_entries = self.library.scan()
+            self.libraryChanged.emit()
+        except Exception as error: self._error(f'曲库读取失败：{error}')
+
+    @Slot()
+    def chooseLibrary(self):
+        if self._busy or self.binding.active: return
+        path = QFileDialog.getExistingDirectory(None, '选择演奏库文件夹', str(self.library.directory))
+        if path: self.setLibraryPath(path)
+
+    @Slot(str)
+    def setLibraryPath(self, path):
+        if self._busy or self.binding.active: return
+        try:
+            selected = ScoreLibrary(path)
+            if not selected.directory.is_dir(): raise ValueError('请选择已有的曲库文件夹')
+            entries = selected.scan()
+            atomic_json(self.data_dir/'preferences.json', self._preferences() | {'library_directory':str(selected.directory)})
+            self.library, self._library_entries = selected, entries
+            self.libraryChanged.emit()
+            self._error(f'曲库已切换：{len(entries)} 份曲谱；可加入播放列表或试听')
+        except Exception as error: self._error(f'曲库未切换：{error}')
+
+    @Slot()
+    def showLibraryFolder(self):
+        from PySide6.QtGui import QDesktopServices
+        try:
+            self.library.directory.mkdir(parents=True, exist_ok=True)
+            if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.library.directory))):
+                raise ValueError('无法打开文件夹，请复制曲库路径到资源管理器')
+        except Exception as error: self._error(error)
+
+    def _queue_library_scores(self, paths):
+        queued = {item['path'] for item in self._playlist}
+        pending = list(self._playlist)
+        added = 0
         for path in paths:
-            try: self._add_score(path)
-            except Exception as e: self._error(e)
-        self._save_playlist()
-        self.changed.emit()
+            normalized = str(Path(path).resolve())
+            if normalized in queued: continue
+            score = read_score(normalized)
+            pending.append({'path':normalized, 'title':score.title, 'duration':score.duration_ms})
+            queued.add(normalized)
+            added += 1
+        atomic_json(self.data_dir/'playlist.json', [item['path'] for item in pending])
+        self._playlist = pending
+        self.playlistChanged.emit()
+        self.libraryChanged.emit()
+        return added
+
+    @Slot(str)
+    def importScoreFiles(self, value):
+        if self._busy or self.binding.active: return
+        try:
+            paths = json.loads(value)
+            if not isinstance(paths, list) or any(not isinstance(path, str) or not path.strip() for path in paths):
+                raise ValueError('请提供本地曲谱文件列表')
+            if not paths: return
+            successful, failures, created = [], [], 0
+            for raw in paths:
+                source = QUrl(raw).toLocalFile() if raw.lower().startswith('file:') else raw
+                try:
+                    imported = self.library.import_score(source)
+                    successful.append(str(imported.path))
+                    created += int(imported.created)
+                except Exception as error: failures.append(f'{Path(source).name}：{error}')
+            self.refreshLibrary()
+            if successful:
+                if self.mode == 'player': self._queue_library_scores(successful)
+                self.openLibraryScore(successful[0])
+            self._error(f'导入完成：成功 {len(successful)}/{len(paths)}，新增 {created}，复用 {len(successful)-created}'
+                        + ('；失败：'+'；'.join(failures) if failures else '；已保留原音高与时值'))
+        except Exception as error: self._error(error)
+
+    @Slot(str, result=bool)
+    def openLibraryScore(self, path):
+        if self._busy or self.binding.active: return False
+        try:
+            selected = Path(path).resolve()
+            if not selected.is_relative_to(self.library.directory): raise ValueError('曲谱不在当前曲库中，请先导入')
+            read_score(selected)
+            self.stop(); self.stopAudio()
+            if self.mode == 'player':
+                self._add_score(selected)
+                self._save_playlist()
+                self._error('已载入曲库曲谱；可试听或在演奏页启动，音高与时值保留')
+            else:
+                if not self.loadProjectPath(str(selected)): return False
+            return True
+        except Exception as error:
+            self._error(f'曲谱载入失败：{error}')
+            return False
+
+    @Slot(str, result=bool)
+    def previewLibraryScore(self, path):
+        if not self.openLibraryScore(path): return False
+        self.auditionScore()
+        return True
+
+    @Slot()
+    def addLibraryToPlaylist(self):
+        if self._busy or self.binding.active: return
+        try:
+            self.refreshLibrary()
+            paths = [entry['path'] for entry in self._library_entries if not entry['error']]
+            added = self._queue_library_scores(paths)
+            if self._selected < 0 and paths and self.mode == 'player': self.openLibraryScore(paths[0])
+            self._error(f'已加入 {added} 首，播放列表共 {len(self._playlist)} 首；重复曲目不再添加')
+        except Exception as error: self._error(error)
 
     @Slot()
     def loadDemo(self):
@@ -470,6 +596,7 @@ class Backend(QObject):
             self._check()
             self.scoreChanged.emit()
             self.playlistChanged.emit()
+            self.libraryChanged.emit()
             self.changed.emit()
 
     @Slot(bool, float, float, int, bool, bool, int, bool)
@@ -491,7 +618,8 @@ class Backend(QObject):
                     "transpose":self._transpose,"melody":self._melody,"skip":self._skip,
                     "auto_continue":self._auto_continue,"long_policy":self._long_policy,"repeat_gap":self._repeat_gap,
                     'repair_minimum':self._repair_minimum,'repair_gap':self._repair_gap,'repair_merge':self._repair_merge,
-                    'melody_minimum':self._melody_minimum,'melody_maximum':self._melody_maximum}
+                    'melody_minimum':self._melody_minimum,'melody_maximum':self._melody_maximum,
+                    'library_directory':str(self.library.directory)}
 
     @Slot(str, float)
     def configureArticulation(self, policy, gap):
@@ -915,21 +1043,26 @@ class Backend(QObject):
         path, _ = QFileDialog.getOpenFileName(None, "打开曲谱工程", str(self.data_dir), "曲谱 (*.json *.mid *.midi)")
         if path: self.loadProjectPath(path)
 
-    @Slot(str)
+    @Slot(str, result=bool)
     def loadProjectPath(self, path):
+        if self._busy or self.binding.active: return False
         try:
             self.stopAudio()
             score = Score.from_midi(path) if path.lower().endswith((".mid", ".midi")) else Score.load(path)
-            self._score, self._audio_path = score, score.source_file
+            self._score = score
+            self._audio_path = score.source_file if Path(score.source_file).suffix.lower() in {'.mp3','.wav','.flac','.ogg','.m4a'} else ''
             self._undo, self._redo, self._selected_note = [], [], -1
             self.selectionChanged.emit()
             self._waveform = score.metadata.get("waveform", [])
-            self._audio_queue = [score.source_file] if Path(score.source_file).is_file() else []
+            self._audio_queue = [self._audio_path] if self._audio_path and Path(self._audio_path).is_file() else []
             self._check()
             self.scoreChanged.emit()
             self._message = "已打开曲谱；点击音符可校对与试听"
             self.changed.emit()
-        except Exception as e: self._error(e)
+            return True
+        except Exception as e:
+            self._error(e)
+            return False
 
     @Slot()
     def recoverProject(self):
